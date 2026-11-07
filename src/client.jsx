@@ -219,7 +219,11 @@ export function SpendingPage() {
   )
 
   const noticeEl = notice && (
-    <div className={`dshsp-notice${notice.error ? ' dshsp-error' : ''}`} role="status">{notice.text}</div>
+    <div className={`dshsp-notice dshsp-notice-dismissable${notice.error ? ' dshsp-error' : ''}`} role="status">
+      <span>{notice.text}</span>
+      <button type="button" className="dshsp-notice-close" aria-label="关闭提示" title="关闭"
+        onClick={() => setNotice(undefined)}>×</button>
+    </div>
   )
 
   if (store.rows.length === 0) {

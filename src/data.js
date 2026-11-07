@@ -11,18 +11,29 @@ export const CATEGORIES = [
   'Shopping',
   'Pets',
   'Other',
-  'Housing & utilities', // appended after Other so earlier categories keep their colours
+  // appended after Other so earlier categories keep their colours
+  'Housing & utilities',
+  'Insurance',
+  'Travel',
+  'Medical',
+  'Entertainment',
 ]
 
+// First match wins, so the more specific categories come first
+// (e.g. "Sokos Hotel" is travel, not shopping at Sokos; a restaurant at a resort is dining).
 const RULES = [
+  ['Insurance', /vakuutus|insurance|\bif p&c\b|^if\b|lähitapiola|fennia|pohjola vakuutus|turva\b/i],
+  ['Medical', /apteekki|pharmacy|terveys|mehiläinen|terveystalo|pihlajalinna|aava|lääkäri|hammas|dental|klinikka|clinic|hospital|sairaala|\bhus\b|laboratori|synlab|optikko|instrumentarium|specsavers/i],
   ['Groceries', /prisma|lidl|k-?citymarket|k-?supermarket|k-?market|s-?market|alepa|asian market|gc market|supermarket|sun market|dajiangyou|tokyokan|hakaniemen|food ?market|ruoka|\balko\b/i],
   ['Restaurants & cafés', /wolt|foodora|espresso house|starbucks|robert'?s coffee|cafe|café|coffee|kahvila|ravintola|restaurant|mcdonald|\bmcd|\bkfc\b|burger|hesburger|pizza|sushi|kebab|bar /i],
-  ['Transport & car', /bilia|traficom|liikenne ja viestint|tallink|viking line|moovy|aimo|europark|easypark|parking|pysäk|neste|st1|teboil|abc |shell|virta|ev ?charg|recharge|epass24|hsl|vr-|vr |taxi|uber|bolt|finnair|ryanair|sas /i],
+  ['Travel', /hotel|hostel|motel|booking\.com|airbnb|expedia|agoda|trivago|scandic|radisson|hilton|marriott|finnair|ryanair|norwegian|lufthansa|airbaltic|\bklm\b|\bsas |tallink|silja|viking line|eckerö|finnlines|himos|\blevi\b|\bruka\b|matkahuolto|onnibus|flixbus|travel|matka/i],
+  ['Entertainment', /finnkino|megastar|bowling|keilailu|ooppera|kansallisooppe|teatteri|theatre|theater|cinema|elokuva|konsertti|concert|lippupiste|lippu\.fi|tiketti|ticketmaster|liveniation|steam|playstation|nintendo|epic games|linnanmäki|serena|museo|museum|escape|karaoke|tivoli|sea life|hc helsinki|jokerit/i],
+  ['Transport & car', /bilia|traficom|liikenne ja viestint|moovy|aimo|europark|easypark|parking|pysäk|neste|st1|teboil|abc |shell|virta|ev ?charg|recharge|epass24|hsl|vr-|vr |taxi|uber|bolt/i],
   ['Subscriptions', /youtube|google|openai|chatgpt|anthropic|claude\.ai|apple\.com|itunes|icloud|amazon digi|prime video|netflix|spotify|disney|hbo|telia|elisa|dna oy|microsoft|github/i],
-  ['Health & fitness', /sats|elixia|apteekki|pharmacy|epassi|smartum|uifin|gym|fitness|terveys|mehiläinen|terveystalo|lääkäri|hammas/i],
+  ['Health & fitness', /sats|elixia|epassi|smartum|uifin|gym|fitness|kuntosali|urheilu/i],
   ['Shopping', /k-?rauta|partioaitta|kirjakaup|akateeminen|marimekko|muji|biltema|ikea|clas ohlson|tokmanni|gigantti|verkkokauppa|power |h&m|zara|zalando|amazon|stockmann|sokos|motonet|xxl|intersport|halpa-halli/i],
   ['Pets', /musti|mirri|pet ?shop|eläin/i],
-  ['Housing & utilities', /\bas oy\b|housing|asunto|vuokra|isännöinti|helen|caruna|fortum|oomi|vattenfall|vesihuolto|sähkö|vakuutus|insurance/i],
+  ['Housing & utilities', /\bas oy\b|housing|asunto|vuokra|isännöinti|helen|caruna|fortum|oomi|vattenfall|vesihuolto|sähkö/i],
 ]
 
 /** Category for a merchant name from the keyword rules (overrides are applied separately). */

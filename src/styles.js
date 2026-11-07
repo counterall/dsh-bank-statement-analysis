@@ -14,6 +14,7 @@ export const CSS = `
   --sp-accent: var(--dsw-alias-brand-primary, #2a78d6);
   --sp-s0: #2a78d6; --sp-s1: #eb6834; --sp-s2: #1baf7a; --sp-s3: #eda100;
   --sp-s4: #e87ba4; --sp-s5: #008300; --sp-s6: #6250d6; --sp-s7: #8f8e88; --sp-s8: #8a5a2b;
+  --sp-s9: #0e8fa3; --sp-s10: #c43c8f; --sp-s11: #d64545; --sp-s12: #7a9a1f;
   --sp-income: #1a9e5c; --sp-deficit: #d03b3b;
   height: 100%;
   overflow: auto;
@@ -27,6 +28,7 @@ body[data-ds-dark-theme] .dshsp-root {
   color-scheme: dark;
   --sp-s0: #3987e5; --sp-s1: #d95926; --sp-s2: #199e70; --sp-s3: #c98500;
   --sp-s4: #d55181; --sp-s5: #008300; --sp-s6: #9085e9; --sp-s7: #7d7c77; --sp-s8: #b07a45;
+  --sp-s9: #2ba7ba; --sp-s10: #d660a8; --sp-s11: #e5605c; --sp-s12: #94b43a;
   --sp-income: #2fb872; --sp-deficit: #e5534b;
 }
 .dshsp-root *, .dshsp-root *::before, .dshsp-root *::after { box-sizing: border-box; }
@@ -127,5 +129,9 @@ body[data-ds-dark-theme] .dshsp-root {
 .dshsp-empty h2 { color: var(--sp-text); font-size: 16px; margin: 12px 0 4px; }
 .dshsp-notice { margin-bottom: 12px; padding: 8px 12px; border-radius: 8px; background: var(--sp-hover); color: var(--sp-text-2); }
 .dshsp-notice.dshsp-error { color: #d03b3b; }
+.dshsp-notice-dismissable { display: flex; align-items: flex-start; gap: 8px; }
+.dshsp-notice-dismissable > span { flex: 1; }
+.dshsp-notice-close { flex: none; border: 0; background: transparent; color: var(--sp-text-3); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+.dshsp-notice-close:hover { color: var(--sp-text); background: var(--sp-card); }
 .dshsp-more { margin-top: 8px; color: var(--sp-text-3); font-size: 12px; }
 `
