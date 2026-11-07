@@ -253,12 +253,20 @@ export function categoryTotals(entries) {
 /** Earliest date included by a range preset, relative to the latest data date. */
 export function rangeStart(range, latestIso) {
   if (range === 'all' || !latestIso) return undefined
-  const d = toDate(latestIso)
   if (range === 'ytd') return `${latestIso.slice(0, 4)}-01-01`
   const months = range === '3m' ? 3 : range === '6m' ? 6 : 12
-  d.setUTCMonth(d.getUTCMonth() - months)
+  const [y, m, day] = latestIso.split('-').map(Number)
+  // Same day N months earlier, clamped to that month's length (May 31 − 3m → Feb 28), then +1 day.
+  const lastDay = new Date(Date.UTC(y, m - 1 - months + 1, 0)).getUTCDate()
+  const d = new Date(Date.UTC(y, m - 1 - months, Math.min(day, lastDay)))
   d.setUTCDate(d.getUTCDate() + 1)
   return toIso(d)
+}
+
+/** True when a range preset includes every entry (it would show the same as "all"). */
+export function rangeCoversAll(range, earliestIso, latestIso) {
+  const from = rangeStart(range, latestIso)
+  return !from || !earliestIso || from <= earliestIso
 }
 
 export function daysBetween(a, b) {

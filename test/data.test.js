@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   bucketize, bucketLabel, categorize, categoryTotals, merchantOf, mergeRows,
-  parseAmount, parseDate, parseStatement, rangeStart, spendingOf,
+  parseAmount, parseDate, parseStatement, rangeCoversAll, rangeStart, spendingOf,
 } from '../src/data.js'
 
 const SAMPLE = '﻿Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
@@ -72,4 +72,20 @@ test('helpers', () => {
   assert.equal(categorize('STL PALVELUT Oy'), 'Other')
   assert.equal(rangeStart('3m', '2026-11-03'), '2026-08-04')
   assert.equal(rangeStart('ytd', '2026-11-03'), '2026-01-01')
+})
+
+test('range start clamps to month end instead of overflowing', () => {
+  assert.equal(rangeStart('3m', '2026-05-31'), '2026-03-01')
+  assert.equal(rangeStart('6m', '2026-08-31'), '2026-03-01')
+  assert.equal(rangeStart('12m', '2028-02-29'), '2027-03-01')
+  assert.equal(rangeStart('3m', '2026-03-15'), '2025-12-16')
+  assert.equal(rangeStart('all', '2026-03-15'), undefined)
+})
+
+test('rangeCoversAll flags presets that cannot narrow the data', () => {
+  // Data from 2026-08-21 to 2026-11-03: every preset includes everything.
+  for (const r of ['3m', '6m', '12m', 'ytd', 'all']) assert.equal(rangeCoversAll(r, '2026-08-21', '2026-11-03'), true)
+  // Two years of data: only "all" covers it.
+  for (const r of ['3m', '6m', '12m', 'ytd']) assert.equal(rangeCoversAll(r, '2024-11-01', '2026-11-03'), false)
+  assert.equal(rangeCoversAll('all', '2024-11-01', '2026-11-03'), true)
 })
