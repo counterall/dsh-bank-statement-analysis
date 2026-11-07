@@ -2,7 +2,7 @@
 // Workspace section) that opens a full spending dashboard in the main column.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, rangeStart, spendingOf,
+  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, rangeCoversAll, rangeStart, spendingOf,
 } from './data.js'
 import { load, save } from './storage.js'
 import { CSS } from './styles.js'
@@ -16,12 +16,16 @@ const PAGE_SIZES = [20, 50, 100]
 const RANGES = [['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部']]
 const GRANULARITIES = [['week', '周'], ['month', '月'], ['year', '年']]
 
-function Segmented({ options, value, onChange, label }) {
+function Segmented({ options, value, onChange, label, isDisabled, disabledTitle }) {
   return (
     <div className="dshsp-seg" role="group" aria-label={label}>
-      {options.map(([v, text]) => (
-        <button key={v} type="button" aria-pressed={value === v} onClick={() => onChange(v)}>{text}</button>
-      ))}
+      {options.map(([v, text]) => {
+        const disabled = isDisabled?.(v) ?? false
+        return (
+          <button key={v} type="button" aria-pressed={value === v} disabled={disabled}
+            title={disabled ? disabledTitle : undefined} onClick={() => onChange(v)}>{text}</button>
+        )
+      })}
     </div>
   )
 }
@@ -59,33 +63,38 @@ export function SpendingPage() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef(null)
+  // Latest store for async imports, so overlapping imports never merge into a stale snapshot.
+  const storeRef = useRef(store)
 
   const update = useCallback(next => {
+    storeRef.current = next
     setStore(next)
     if (!save(next)) setNotice({ error: true, text: '无法写入本地存储，刷新后数据将丢失。' })
   }, [])
 
   const importFiles = useCallback(async files => {
-    let rows = store.rows
-    const names = []
-    let added = 0
-    let skipped = 0
+    const parsedFiles = []
     try {
-      for (const file of files) {
-        const parsed = parseStatement(await readFile(file))
-        const m = mergeRows(rows, parsed.rows)
-        rows = m.merged
-        added += m.added
-        skipped += parsed.skipped
-        names.push(file.name)
-      }
+      for (const file of files) parsedFiles.push([file.name, parseStatement(await readFile(file))])
     } catch (e) {
       setNotice({ error: true, text: `导入失败：${e instanceof Error ? e.message : String(e)}` })
       return
     }
-    update({ ...store, rows, files: [...new Set([...store.files, ...names])] })
+    const base = storeRef.current
+    let rows = base.rows
+    const names = []
+    let added = 0
+    let skipped = 0
+    for (const [name, parsed] of parsedFiles) {
+      const m = mergeRows(rows, parsed.rows)
+      rows = m.merged
+      added += m.added
+      skipped += parsed.skipped
+      names.push(name)
+    }
+    update({ ...base, rows, files: [...new Set([...base.files, ...names])] })
     setNotice({ text: `已从 ${names.join('、')} 导入 ${added} 笔新交易` + (skipped ? `（跳过 ${skipped} 行无法识别的内容）` : '') + '。' })
-  }, [store, update])
+  }, [update])
 
   const onPick = e => {
     const files = [...(e.target.files ?? [])]
@@ -107,6 +116,8 @@ export function SpendingPage() {
   // then the category filter, which every chart, tile and the table share.
   const all = useMemo(() => spendingOf(store.rows, store.overrides), [store])
   const latest = all.length ? all.reduce((a, e) => (e.date > a ? e.date : a), all[0].date) : undefined
+  const earliest = all.length ? all.reduce((a, e) => (e.date < a ? e.date : a), all[0].date) : undefined
+  const coversAll = r => r !== 'all' && rangeCoversAll(r, earliest, latest)
   const from = rangeStart(range, latest)
   const inPeriod = useMemo(() => (from ? all.filter(e => e.date >= from) : all), [all, from])
   const periodTotals = useMemo(() => categoryTotals(inPeriod), [inPeriod])
@@ -210,10 +221,17 @@ export function SpendingPage() {
         <section className="dshsp-filters" aria-label="筛选">
           <div className="dshsp-filter-row">
             <span className="dshsp-label">时间范围</span>
-            <Segmented label="时间范围" options={RANGES} value={range} onChange={setRange} />
+            <Segmented label="时间范围" options={RANGES} value={range} onChange={setRange}
+              isDisabled={coversAll}
+              disabledTitle={`已导入的账单只覆盖 ${earliest} 至 ${latest}，此范围与「全部」相同。导入更早的账单后即可使用。`} />
             <span className="dshsp-label dshsp-gap">趋势粒度</span>
             <Segmented label="趋势粒度" options={GRANULARITIES} value={granularity} onChange={setGranularity} />
-            {first && <span className="dshsp-label dshsp-push">{`${first} 至 ${latest}`}</span>}
+            {latest && (
+              <span className="dshsp-label dshsp-push">
+                {`${from && from > earliest ? from : earliest} 至 ${latest}`}
+                {RANGES.some(([r]) => coversAll(r)) && `（账单数据自 ${earliest} 起）`}
+              </span>
+            )}
           </div>
           <div className="dshsp-filter-row">
             <span className="dshsp-label" title="点击分类筛选，可多选">消费分类<br />（可多选）</span>

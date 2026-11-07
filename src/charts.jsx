@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { CATEGORIES, bucketLabel, bucketShortLabel } from './data.js'
 import { catLabel } from './i18n.js'
 
@@ -119,6 +119,7 @@ function topRounded(x, y, w, h, r) {
 export function TrendChart({ buckets, granularity, series }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(undefined)
+  useEffect(() => { setHover(undefined) }, [buckets])
   const height = 320
   const m = { top: 14, right: 8, bottom: 26, left: 60 }
   const iw = Math.max(10, width - m.left - m.right)

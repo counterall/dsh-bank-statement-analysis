@@ -63,6 +63,7 @@ body[data-ds-dark-theme] .dshsp-root {
 .dshsp-seg button { appearance: none; border: 0; background: transparent; color: var(--sp-text-2); font: inherit;
   padding: 4px 10px; border-radius: 7px; cursor: pointer; }
 .dshsp-seg button[aria-pressed="true"] { background: var(--sp-surface); color: var(--sp-text); box-shadow: 0 0 0 0.5px var(--sp-border), 0 1px 2px rgba(0,0,0,.06); }
+.dshsp-seg button:disabled { opacity: .4; cursor: not-allowed; }
 .dshsp-label { color: var(--sp-text-3); font-size: 12px; }
 .dshsp-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .dshsp-tile { border: 0.5px solid var(--sp-border); border-radius: 12px; padding: 12px 14px; background: var(--sp-card); }
