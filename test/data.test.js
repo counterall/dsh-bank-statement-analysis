@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   bucketize, bucketLabel, categorize, categoryTotals, merchantOf, mergeRows,
-  parseAmount, parseDate, parseStatement, rangeCoversAll, rangeStart, spendingOf,
+  parseAmount, parseDate, parseStatement, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
 } from '../src/data.js'
 
 const SAMPLE = '﻿Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
@@ -88,4 +88,15 @@ test('rangeCoversAll flags presets that cannot narrow the data', () => {
   // Two years of data: only "all" covers it.
   for (const r of ['3m', '6m', '12m', 'ytd']) assert.equal(rangeCoversAll(r, '2024-11-01', '2026-11-03'), false)
   assert.equal(rangeCoversAll('all', '2024-11-01', '2026-11-03'), true)
+})
+
+test('last month is the calendar month before the latest data month', () => {
+  assert.equal(rangeStart('lastmonth', '2026-11-03'), '2026-10-01')
+  assert.equal(rangeEnd('lastmonth', '2026-11-03'), '2026-10-31')
+  assert.equal(rangeStart('lastmonth', '2026-01-20'), '2025-12-01')
+  assert.equal(rangeEnd('lastmonth', '2026-01-20'), '2025-12-31')
+  assert.equal(rangeEnd('lastmonth', '2028-03-31'), '2028-02-29')
+  assert.equal(rangeEnd('3m', '2026-11-03'), undefined)
+  // Ends before the latest date, so it always narrows the data.
+  assert.equal(rangeCoversAll('lastmonth', '2026-08-21', '2026-11-03'), false)
 })
