@@ -2,7 +2,7 @@
 
 DeepSeek Harness plugin that adds a **消费分析** (Spending) entry to the left sidebar (the panel list above the Workspace section). It opens a dashboard (Chinese UI) built from bank statement CSVs (Nordea export format):
 
-- one global filter bar above the charts: period (3M/6M/12M/YTD/All), trend granularity (week/month/year), and multi-select categories with their amounts. The filters apply to every chart, tile and the table.
+- one global filter bar above the charts: period (last month/3M/6M/12M/YTD/All; picking last month switches the trend to weekly), trend granularity (week/month/year), and multi-select categories with their amounts. The filters apply to every chart, tile and the table. Periods count back from the latest imported transaction; presets that would include all imported data anyway (e.g. 12M when the statement only covers 2 months) are disabled, with a hint showing the data coverage.
 - category share donut and stacked spending-over-time columns
 - paginated transactions table (20/50/100 per page, default 50), where you can recategorise a merchant
 
