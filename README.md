@@ -4,6 +4,7 @@ DeepSeek Harness plugin that adds a **消费分析** (Spending) entry to the lef
 
 - one global filter bar above the charts: period (last month/3M/6M/12M/YTD/All; picking last month switches the trend to weekly), trend granularity (week/month/year), and multi-select categories with their amounts. The filters apply to every chart, tile and the table. Periods count back from the latest imported transaction; presets that would include all imported data anyway (e.g. 12M when the statement only covers 2 months) are disabled, with a hint showing the data coverage.
 - tiles for spend, monthly spend, top category, cashback, income, monthly income, surplus and monthly surplus (surplus = income − spending in all categories)
+- categories: groceries, dining, transport, subscriptions, fitness, shopping, pets, housing & utilities, insurance, travel, medical, entertainment, other (keyword rules; recategorise any merchant in the table)
 - category share donut and a trend chart: stacked spending columns, or — for month/year granularity — income or surplus (收入 / 支出 / 盈余 toggle)
 - paginated transactions table (20/50/100 per page, default 50) with the account (信用卡/借记卡), where you can recategorise a merchant
 
