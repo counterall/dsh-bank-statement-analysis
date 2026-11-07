@@ -10,6 +10,7 @@ export const CATEGORY_LABELS = {
   'Shopping': '购物',
   'Pets': '宠物',
   'Other': '其他',
+  'Housing & utilities': '住房与生活缴费',
 }
 
 export const catLabel = c => CATEGORY_LABELS[c] ?? c

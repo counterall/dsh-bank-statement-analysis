@@ -11,16 +11,18 @@ export const CATEGORIES = [
   'Shopping',
   'Pets',
   'Other',
+  'Housing & utilities', // appended after Other so earlier categories keep their colours
 ]
 
 const RULES = [
-  ['Groceries', /prisma|lidl|k-?citymarket|k-?supermarket|k-?market|s-?market|alepa|asian market|gc market|supermarket|sun market|dajiangyou|tokyokan|hakaniemen|food ?market|ruoka/i],
-  ['Restaurants & cafés', /wolt|foodora|espresso house|starbucks|robert'?s coffee|cafe|café|coffee|kahvila|ravintola|restaurant|mcdonald|burger|hesburger|pizza|sushi|kebab|bar /i],
-  ['Transport & car', /moovy|aimo|europark|easypark|parking|pysäk|neste|st1|teboil|abc |shell|virta|ev ?charg|recharge|epass24|hsl|vr-|vr |taxi|uber|bolt|finnair|ryanair|sas /i],
-  ['Subscriptions', /youtube|google|openai|chatgpt|anthropic|claude\.ai|apple\.com|icloud|amazon digi|prime video|netflix|spotify|disney|hbo|telia|elisa|dna oy|microsoft|github/i],
+  ['Groceries', /prisma|lidl|k-?citymarket|k-?supermarket|k-?market|s-?market|alepa|asian market|gc market|supermarket|sun market|dajiangyou|tokyokan|hakaniemen|food ?market|ruoka|\balko\b/i],
+  ['Restaurants & cafés', /wolt|foodora|espresso house|starbucks|robert'?s coffee|cafe|café|coffee|kahvila|ravintola|restaurant|mcdonald|\bmcd|\bkfc\b|burger|hesburger|pizza|sushi|kebab|bar /i],
+  ['Transport & car', /bilia|traficom|liikenne ja viestint|tallink|viking line|moovy|aimo|europark|easypark|parking|pysäk|neste|st1|teboil|abc |shell|virta|ev ?charg|recharge|epass24|hsl|vr-|vr |taxi|uber|bolt|finnair|ryanair|sas /i],
+  ['Subscriptions', /youtube|google|openai|chatgpt|anthropic|claude\.ai|apple\.com|itunes|icloud|amazon digi|prime video|netflix|spotify|disney|hbo|telia|elisa|dna oy|microsoft|github/i],
   ['Health & fitness', /sats|elixia|apteekki|pharmacy|epassi|smartum|uifin|gym|fitness|terveys|mehiläinen|terveystalo|lääkäri|hammas/i],
-  ['Shopping', /muji|biltema|ikea|clas ohlson|tokmanni|gigantti|verkkokauppa|power |h&m|zara|zalando|amazon|stockmann|sokos|motonet|xxl|intersport|halpa-halli/i],
+  ['Shopping', /k-?rauta|partioaitta|kirjakaup|akateeminen|marimekko|muji|biltema|ikea|clas ohlson|tokmanni|gigantti|verkkokauppa|power |h&m|zara|zalando|amazon|stockmann|sokos|motonet|xxl|intersport|halpa-halli/i],
   ['Pets', /musti|mirri|pet ?shop|eläin/i],
+  ['Housing & utilities', /\bas oy\b|housing|asunto|vuokra|isännöinti|helen|caruna|fortum|oomi|vattenfall|vesihuolto|sähkö|vakuutus|insurance/i],
 ]
 
 /** Category for a merchant name from the keyword rules (overrides are applied separately). */
@@ -78,8 +80,30 @@ export function merchantOf(title) {
   return t.trim()
 }
 
-/** What a statement row means for spending. */
-export function kindOf(title, amount) {
+/**
+ * Which account a statement comes from. The file name decides ("Nordea Gold …"
+ * is the credit card, "Current Account …" the debit account); without a hint,
+ * a Balance column means a bank account export.
+ * @returns {'credit'|'debit'}
+ */
+export function accountOf(fileName = '', header = []) {
+  if (/gold|platinum|credit|luotto|mastercard|visa/i.test(fileName)) return 'credit'
+  if (/current|account|debit|käyttötili|tili/i.test(fileName)) return 'debit'
+  return header.includes('balance') || header.includes('saldo') ? 'debit' : 'credit'
+}
+
+/**
+ * What a statement row means for spending.
+ * Credit card: purchase / refund / payment (paying off the card) / cashback.
+ * Debit account: purchase / payment (transfer to Nordea Bank Abp = card repayment,
+ * already counted via the card's own purchases) / deposit (income or a refund,
+ * decided at analysis time from the merchants paid).
+ */
+export function kindOf(title, amount, account = 'credit') {
+  if (account === 'debit') {
+    if (/^nordea bank abp\b/i.test(title.trim())) return 'payment'
+    return amount < 0 ? 'purchase' : 'deposit'
+  }
   if (/^payment\b/i.test(title)) return 'payment' // paying off the card: not spending
   if (/cashback/i.test(title)) return 'cashback'
   return amount < 0 ? 'purchase' : 'refund'
@@ -93,10 +117,11 @@ const HEADER_ALIASES = {
 }
 
 /**
- * Parse a bank statement CSV (Nordea export format; tolerant of similar ones).
- * @returns {{ rows: Array<{date:string,title:string,merchant:string,amount:number,currency:string,kind:string}>, skipped: number }}
+ * Parse a bank statement CSV (Nordea credit card or current account export;
+ * tolerant of similar ones). `fileName` tells the two account types apart.
+ * @returns {{ account: 'credit'|'debit', rows: Array<{date:string,title:string,merchant:string,amount:number,currency:string,kind:string,account:string}>, skipped: number }}
  */
-export function parseStatement(text) {
+export function parseStatement(text, fileName = '') {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim() !== '')
   if (lines.length === 0) throw new Error('The file is empty.')
   const sep = (lines[0].match(/;/g) ?? []).length >= (lines[0].match(/,/g) ?? []).length ? ';' : ','
@@ -108,6 +133,7 @@ export function parseStatement(text) {
   if (col.date === undefined || col.title === undefined || col.amount === undefined) {
     throw new Error('Could not find the date, title and amount columns in this CSV.')
   }
+  const account = accountOf(fileName, header)
   const rows = []
   let skipped = 0
   for (const line of lines.slice(1)) {
@@ -122,13 +148,15 @@ export function parseStatement(text) {
       merchant: merchantOf(title),
       amount,
       currency: (col.currency !== undefined && f[col.currency]) || 'EUR',
-      kind: kindOf(title, amount),
+      kind: kindOf(title, amount, account),
+      account,
     })
   }
-  return { rows, skipped }
+  return { account, rows, skipped }
 }
 
-const rowKey = r => `${r.date}|${r.title}|${r.amount}`
+// Rows stored before debit support carry no account: they are credit card rows.
+const rowKey = r => `${r.account ?? 'credit'}|${r.date}|${r.title}|${r.amount}`
 
 /**
  * Merge newly imported rows into the stored ones. Identical rows (same date,
@@ -152,14 +180,23 @@ export function mergeRows(existing, incoming) {
   return { merged, added }
 }
 
+/** Merchants with at least one purchase: a deposit from one of them is a refund, not income. */
+function paidMerchants(rows) {
+  const paid = new Set()
+  for (const r of rows) if (r.kind === 'purchase') paid.add(r.merchant)
+  return paid
+}
+
 /**
  * Spending entries: purchases count positive, merchant refunds negative.
- * Card payments and cashback are excluded.
+ * Card payments, cashback and income are excluded.
  */
 export function spendingOf(rows, overrides) {
+  const paid = paidMerchants(rows)
   const out = []
   for (const r of rows) {
-    if (r.kind !== 'purchase' && r.kind !== 'refund') continue
+    const refund = r.kind === 'refund' || (r.kind === 'deposit' && paid.has(r.merchant))
+    if (r.kind !== 'purchase' && !refund) continue
     out.push({
       ...r,
       spend: -r.amount,
@@ -167,6 +204,12 @@ export function spendingOf(rows, overrides) {
     })
   }
   return out
+}
+
+/** Income entries: debit account deposits from anyone you never paid (salary, tax refunds, …). */
+export function incomeOf(rows) {
+  const paid = paidMerchants(rows)
+  return rows.filter(r => r.kind === 'deposit' && !paid.has(r.merchant))
 }
 
 // ---- dates -----------------------------------------------------------------
@@ -219,17 +262,19 @@ export function bucketShortLabel(start, granularity) {
 
 /**
  * Continuous series of buckets (empty periods included) from the earliest to
- * the latest entry, each with per-category totals.
+ * the latest entry (spending or income), each with per-category spending,
+ * the spending total and the income.
  */
-export function bucketize(entries, granularity) {
-  if (entries.length === 0) return []
-  let min = entries[0].date
-  let max = entries[0].date
-  for (const e of entries) { if (e.date < min) min = e.date; if (e.date > max) max = e.date }
+export function bucketize(entries, granularity, income = []) {
+  if (entries.length === 0 && income.length === 0) return []
+  const dates = [...entries, ...income].map(e => e.date)
+  let min = dates[0]
+  let max = dates[0]
+  for (const d of dates) { if (d < min) min = d; if (d > max) max = d }
   const buckets = []
   const index = new Map()
   for (let s = bucketOf(min, granularity); s <= max; s = nextBucket(s, granularity)) {
-    const b = { start: s, total: 0, byCategory: Object.fromEntries(CATEGORIES.map(c => [c, 0])) }
+    const b = { start: s, total: 0, income: 0, byCategory: Object.fromEntries(CATEGORIES.map(c => [c, 0])) }
     index.set(s, b)
     buckets.push(b)
   }
@@ -238,6 +283,7 @@ export function bucketize(entries, granularity) {
     b.total += e.spend
     b.byCategory[e.category] += e.spend
   }
+  for (const e of income) index.get(bucketOf(e.date, granularity)).income += e.amount
   return buckets
 }
 
