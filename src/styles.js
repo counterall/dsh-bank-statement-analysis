@@ -13,7 +13,8 @@ export const CSS = `
   --sp-active: var(--dsw-alias-interactive-bg-active, rgba(0,0,0,.08));
   --sp-accent: var(--dsw-alias-brand-primary, #2a78d6);
   --sp-s0: #2a78d6; --sp-s1: #eb6834; --sp-s2: #1baf7a; --sp-s3: #eda100;
-  --sp-s4: #e87ba4; --sp-s5: #008300; --sp-s6: #6250d6; --sp-s7: #8f8e88;
+  --sp-s4: #e87ba4; --sp-s5: #008300; --sp-s6: #6250d6; --sp-s7: #8f8e88; --sp-s8: #8a5a2b;
+  --sp-income: #1a9e5c; --sp-deficit: #d03b3b;
   height: 100%;
   overflow: auto;
   box-sizing: border-box;
@@ -25,7 +26,8 @@ export const CSS = `
 body[data-ds-dark-theme] .dshsp-root {
   color-scheme: dark;
   --sp-s0: #3987e5; --sp-s1: #d95926; --sp-s2: #199e70; --sp-s3: #c98500;
-  --sp-s4: #d55181; --sp-s5: #008300; --sp-s6: #9085e9; --sp-s7: #7d7c77;
+  --sp-s4: #d55181; --sp-s5: #008300; --sp-s6: #9085e9; --sp-s7: #7d7c77; --sp-s8: #b07a45;
+  --sp-income: #2fb872; --sp-deficit: #e5534b;
 }
 .dshsp-root *, .dshsp-root *::before, .dshsp-root *::after { box-sizing: border-box; }
 .dshsp-inner { padding: 20px 32px 48px; }
@@ -65,7 +67,8 @@ body[data-ds-dark-theme] .dshsp-root {
 .dshsp-seg button[aria-pressed="true"] { background: var(--sp-surface); color: var(--sp-text); box-shadow: 0 0 0 0.5px var(--sp-border), 0 1px 2px rgba(0,0,0,.06); }
 .dshsp-seg button:disabled { opacity: .4; cursor: not-allowed; }
 .dshsp-label { color: var(--sp-text-3); font-size: 12px; }
-.dshsp-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.dshsp-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 900px) { .dshsp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .dshsp-tile { border: 0.5px solid var(--sp-border); border-radius: 12px; padding: 12px 14px; background: var(--sp-card); }
 .dshsp-tile-label { color: var(--sp-text-2); font-size: 12px; }
 .dshsp-tile-value { font-size: 22px; line-height: 28px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
@@ -116,6 +119,9 @@ body[data-ds-dark-theme] .dshsp-root {
 .dshsp-select { font: inherit; font-size: 12px; color: var(--sp-text); background: transparent; border: 0.5px solid var(--sp-border); border-radius: 6px; padding: 2px 4px; }
 .dshsp-input { font: inherit; color: var(--sp-text); background: transparent; border: 0.5px solid var(--sp-border); border-radius: 8px; padding: 5px 10px; min-width: 0; width: 220px; max-width: 100%; }
 .dshsp-refund { color: var(--sp-s5); }
+.dshsp-surplus { color: var(--sp-income); }
+.dshsp-deficit { color: var(--sp-deficit); }
+.dshsp-account { color: var(--sp-text-2); white-space: nowrap; }
 .dshsp-empty { border: 1px dashed var(--sp-border); border-radius: 16px; padding: 48px 24px; text-align: center; color: var(--sp-text-2); }
 .dshsp-empty.dshsp-drag, .dshsp-root.dshsp-drag .dshsp-inner { outline: 2px dashed var(--sp-accent); outline-offset: -6px; border-radius: 16px; }
 .dshsp-empty h2 { color: var(--sp-text); font-size: 16px; margin: 12px 0 4px; }

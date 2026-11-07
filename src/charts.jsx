@@ -115,8 +115,123 @@ function topRounded(x, y, w, h, r) {
   return `M ${x} ${y + h} V ${y + rr} Q ${x} ${y} ${x + rr} ${y} H ${x + w - rr} Q ${x + w} ${y} ${x + w} ${y + rr} V ${y + h} Z`
 }
 
+/** Rect with only the bottom corners rounded (for bars hanging below zero). */
+function bottomRounded(x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h)
+  return `M ${x} ${y} V ${y + h - rr} Q ${x} ${y + h} ${x + rr} ${y + h} H ${x + w - rr} Q ${x + w} ${y + h} ${x + w} ${y + h - rr} V ${y} Z`
+}
+
+/** Smallest "nice" step (1, 2, 2.5, 5 × 10^n) that is at least v. */
+function niceStep(v) {
+  if (v <= 0) return 1
+  const p = 10 ** Math.floor(Math.log10(v))
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p
+  return 10 * p
+}
+
+const METRIC_LABEL = { spend: '消费', income: '收入', surplus: '盈余' }
+
+/**
+ * Trend per period. `metric` "spend" stacks spending by the selected
+ * categories; "income" and "surplus" (income − all spending) draw one bar per
+ * period, surplus going below zero for deficit periods.
+ */
+export function TrendChart({ metric = 'spend', ...props }) {
+  return metric === 'spend' ? <SpendChart {...props} /> : <FlowChart metric={metric} {...props} />
+}
+
+function Tooltip({ width, tipLeft, children }) {
+  return (
+    <div className="dshsp-tip" style={{
+      top: 8,
+      left: tipLeft > width / 2 ? undefined : tipLeft + 12,
+      right: tipLeft > width / 2 ? width - tipLeft + 12 : undefined,
+    }}>
+      {children}
+    </div>
+  )
+}
+
+function FlowChart({ buckets, granularity, metric }) {
+  const [ref, width] = useWidth()
+  const [hover, setHover] = useState(undefined)
+  useEffect(() => { setHover(undefined) }, [buckets])
+  const height = 320
+  const m = { top: 14, right: 8, bottom: 26, left: 60 }
+  const iw = Math.max(10, width - m.left - m.right)
+  const ih = height - m.top - m.bottom
+  const valueOf = b => (metric === 'income' ? b.income : b.income - b.total)
+  const values = buckets.map(valueOf)
+  const step = niceStep((Math.max(0, ...values) - Math.min(0, ...values)) / 4)
+  const lo = Math.floor(Math.min(0, ...values) / step) * step
+  const hi = Math.max(step, Math.ceil(Math.max(0, ...values) / step) * step)
+  const y = v => m.top + ih - ((v - lo) / (hi - lo)) * ih
+  const ticks = []
+  for (let t = lo; t <= hi + step / 2; t += step) ticks.push(t)
+  const n = Math.max(1, buckets.length)
+  const band = iw / n
+  const barW = Math.max(2, Math.min(64, band * 0.68))
+  const labelEvery = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(iw / 64))))
+  const avg = values.length ? values.reduce((a, v) => a + v, 0) / values.length : 0
+  const fill = v => (metric === 'income' || v >= 0 ? 'var(--sp-income)' : 'var(--sp-deficit)')
+
+  const hb = hover !== undefined ? buckets[hover] : undefined
+  const tipLeft = hover !== undefined ? m.left + band * hover + band / 2 : 0
+
+  return (
+    <div className="dshsp-chart" ref={ref}>
+      <svg width={width} height={height} role="img" aria-label={`每${GRANULARITY_UNIT[granularity]}${METRIC_LABEL[metric]}趋势`}>
+        {ticks.map(t => (
+          <g key={t}>
+            <line x1={m.left} x2={m.left + iw} y1={y(t)} y2={y(t)}
+              stroke={t === 0 ? 'var(--sp-border)' : 'var(--sp-grid)'} strokeWidth={t === 0 ? 1 : 0.5} />
+            <text x={m.left - 8} y={y(t) + 4} textAnchor="end" className="dshsp-axis">{money0(t)}</text>
+          </g>
+        ))}
+        {buckets.map((b, i) => {
+          const v = values[i]
+          const x = m.left + band * i + (band - barW) / 2
+          const h = Math.abs(y(v) - y(0))
+          return (
+            <g key={b.start} opacity={hover !== undefined && hover !== i ? 0.55 : 1}>
+              {h > 0 && (v > 0
+                ? <path d={topRounded(x, y(v), barW, h, 4)} fill={fill(v)} />
+                : <path d={bottomRounded(x, y(0), barW, h, 4)} fill={fill(v)} />)}
+              {i % labelEvery === 0 && (
+                <text x={m.left + band * i + band / 2} y={height - 8} textAnchor="middle" className="dshsp-axis">
+                  {bucketShortLabel(b.start, granularity)}
+                </text>
+              )}
+            </g>
+          )
+        })}
+        {buckets.length > 1 && avg !== 0 && (
+          <g>
+            <line x1={m.left} x2={m.left + iw} y1={y(avg)} y2={y(avg)} stroke="var(--sp-text-2)" strokeWidth={1} strokeDasharray="3 3" />
+            <text x={m.left + iw} y={y(avg) - 5} textAnchor="end" className="dshsp-axis">
+              {`平均 ${money0(avg)} / ${GRANULARITY_UNIT[granularity]}`}
+            </text>
+          </g>
+        )}
+        {buckets.map((b, i) => (
+          <rect key={`hit-${b.start}`} x={m.left + band * i} y={m.top} width={band} height={ih} fill="transparent"
+            onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(undefined)} />
+        ))}
+      </svg>
+      {hb && (
+        <Tooltip width={width} tipLeft={tipLeft}>
+          <div className="dshsp-tip-title">{bucketLabel(hb.start, granularity)}</div>
+          <div className="dshsp-tip-row"><span className="dshsp-sw" style={{ background: 'var(--sp-income)' }} /><span>收入</span><span className="dshsp-num">{money(hb.income)}</span></div>
+          <div className="dshsp-tip-row"><span className="dshsp-sw" style={{ background: 'var(--sp-text-3)' }} /><span>支出</span><span className="dshsp-num">{money(hb.total)}</span></div>
+          <div className="dshsp-tip-total"><span>盈余</span><span>{money(hb.income - hb.total)}</span></div>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
 /** Spending per period, stacked by the selected categories (fixed order, bottom-up). */
-export function TrendChart({ buckets, granularity, series }) {
+function SpendChart({ buckets, granularity, series }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(undefined)
   useEffect(() => { setHover(undefined) }, [buckets])
@@ -191,11 +306,7 @@ export function TrendChart({ buckets, granularity, series }) {
         ))}
       </svg>
       {hb && (
-        <div className="dshsp-tip" style={{
-          top: 8,
-          left: tipLeft > width / 2 ? undefined : tipLeft + 12,
-          right: tipLeft > width / 2 ? width - tipLeft + 12 : undefined,
-        }}>
+        <Tooltip width={width} tipLeft={tipLeft}>
           <div className="dshsp-tip-title">{bucketLabel(hb.start, granularity)}</div>
           {[...ordered].reverse().filter(c => hb.byCategory[c] !== 0).map(c => (
             <div className="dshsp-tip-row" key={c}>
@@ -205,7 +316,7 @@ export function TrendChart({ buckets, granularity, series }) {
             </div>
           ))}
           <div className="dshsp-tip-total"><span>合计</span><span>{money(totalOf(hb))}</span></div>
-        </div>
+        </Tooltip>
       )}
     </div>
   )
