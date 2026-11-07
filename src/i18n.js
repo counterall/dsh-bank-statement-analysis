@@ -6,10 +6,15 @@ export const CATEGORY_LABELS = {
   'Restaurants & cafés': '餐饮外卖',
   'Transport & car': '交通出行',
   'Subscriptions': '订阅与通讯',
-  'Health & fitness': '健康健身',
+  'Health & fitness': '运动健身',
   'Shopping': '购物',
   'Pets': '宠物',
   'Other': '其他',
+  'Housing & utilities': '住房与生活缴费',
+  'Insurance': '保险',
+  'Travel': '旅游',
+  'Medical': '医疗',
+  'Entertainment': '娱乐',
 }
 
 export const catLabel = c => CATEGORY_LABELS[c] ?? c

@@ -2,7 +2,7 @@
 // Workspace section) that opens a full spending dashboard in the main column.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
+  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, incomeOf, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
 } from './data.js'
 import { load, save } from './storage.js'
 import { CSS } from './styles.js'
@@ -15,6 +15,8 @@ const PAGE_SIZES = [20, 50, 100]
 
 const RANGES = [['lastmonth', '上个月'], ['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部']]
 const GRANULARITIES = [['week', '周'], ['month', '月'], ['year', '年']]
+const METRICS = [['income', '收入'], ['spend', '支出'], ['surplus', '盈余']]
+const ACCOUNT_LABELS = { credit: '信用卡', debit: '借记卡' }
 
 function Segmented({ options, value, onChange, label, isDisabled, disabledTitle }) {
   return (
@@ -54,6 +56,7 @@ export function SpendingPage() {
   const [store, setStore] = useState(load)
   const [range, setRange] = useState('all')
   const [granularity, setGranularity] = useState('month')
+  const [metric, setMetric] = useState('spend')
   /** Selected categories; `undefined` means all. */
   const [selected, setSelected] = useState(undefined)
   const [query, setQuery] = useState('')
@@ -75,7 +78,7 @@ export function SpendingPage() {
   const importFiles = useCallback(async files => {
     const parsedFiles = []
     try {
-      for (const file of files) parsedFiles.push([file.name, parseStatement(await readFile(file))])
+      for (const file of files) parsedFiles.push([file.name, parseStatement(await readFile(file), file.name)])
     } catch (e) {
       setNotice({ error: true, text: `导入失败：${e instanceof Error ? e.message : String(e)}` })
       return
@@ -83,6 +86,7 @@ export function SpendingPage() {
     const base = storeRef.current
     let rows = base.rows
     const names = []
+    const labelled = []
     let added = 0
     let skipped = 0
     for (const [name, parsed] of parsedFiles) {
@@ -91,9 +95,10 @@ export function SpendingPage() {
       added += m.added
       skipped += parsed.skipped
       names.push(name)
+      labelled.push(`${name}（${ACCOUNT_LABELS[parsed.account]}）`)
     }
     update({ ...base, rows, files: [...new Set([...base.files, ...names])] })
-    setNotice({ text: `已从 ${names.join('、')} 导入 ${added} 笔新交易` + (skipped ? `（跳过 ${skipped} 行无法识别的内容）` : '') + '。' })
+    setNotice({ text: `已从 ${labelled.join('、')} 导入 ${added} 笔新交易` + (skipped ? `（跳过 ${skipped} 行无法识别的内容）` : '') + '。' })
   }, [update])
 
   const onPick = e => {
@@ -115,13 +120,17 @@ export function SpendingPage() {
   // Period filter first (gives the per-category amounts shown in the filter bar),
   // then the category filter, which every chart, tile and the table share.
   const all = useMemo(() => spendingOf(store.rows, store.overrides), [store])
-  const latest = all.length ? all.reduce((a, e) => (e.date > a ? e.date : a), all[0].date) : undefined
-  const earliest = all.length ? all.reduce((a, e) => (e.date < a ? e.date : a), all[0].date) : undefined
+  const allIncome = useMemo(() => incomeOf(store.rows), [store.rows])
+  const hasDebit = useMemo(() => store.rows.some(r => r.account === 'debit'), [store.rows])
+  const allDates = [...all, ...allIncome].map(e => e.date)
+  const latest = allDates.length ? allDates.reduce((a, d) => (d > a ? d : a)) : undefined
+  const earliest = allDates.length ? allDates.reduce((a, d) => (d < a ? d : a)) : undefined
   const coversAll = r => r !== 'all' && rangeCoversAll(r, earliest, latest)
   const from = rangeStart(range, latest)
   const to = rangeEnd(range, latest)
   const inRange = d => (!from || d >= from) && (!to || d <= to)
   const inPeriod = useMemo(() => all.filter(e => inRange(e.date)), [all, from, to])
+  const incomeInPeriod = useMemo(() => allIncome.filter(e => inRange(e.date)), [allIncome, from, to])
   // Displayed period: the preset's bounds, narrowed to the imported data.
   const periodStart = from && earliest && from > earliest ? from : earliest
   const periodEnd = to && latest && to < latest ? to : latest
@@ -142,7 +151,12 @@ export function SpendingPage() {
     [inPeriod, isAll, active.join('|')],
   )
   const totals = useMemo(() => categoryTotals(entries), [entries])
-  const buckets = useMemo(() => bucketize(entries, granularity), [entries, granularity])
+  // Income and surplus ignore the category filter: surplus = income − all spending.
+  const shownMetric = granularity === 'week' ? 'spend' : metric
+  const buckets = useMemo(
+    () => (shownMetric === 'spend' ? bucketize(entries, granularity) : bucketize(inPeriod, granularity, incomeInPeriod)),
+    [shownMetric, entries, inPeriod, incomeInPeriod, granularity],
+  )
   const cashback = useMemo(() => store.rows
     .filter(r => r.kind === 'cashback' && inRange(r.date))
     .reduce((a, r) => a + r.amount, 0), [store.rows, from, to])
@@ -155,8 +169,12 @@ export function SpendingPage() {
   }
 
   const total = entries.reduce((a, e) => a + e.spend, 0)
-  const days = inPeriod.length ? daysBetween(periodStart, periodEnd) : 0
-  const perMonth = days ? (total / days) * 30.44 : 0
+  const days = inPeriod.length || incomeInPeriod.length ? daysBetween(periodStart, periodEnd) : 0
+  const monthly = v => (days ? (v / days) * 30.44 : 0)
+  const perMonth = monthly(total)
+  const income = incomeInPeriod.reduce((a, e) => a + e.amount, 0)
+  const spendAll = inPeriod.reduce((a, e) => a + e.spend, 0)
+  const surplus = income - spendAll
   const purchases = entries.filter(e => e.spend > 0).length
   const top = totals[0]
 
@@ -201,7 +219,11 @@ export function SpendingPage() {
   )
 
   const noticeEl = notice && (
-    <div className={`dshsp-notice${notice.error ? ' dshsp-error' : ''}`} role="status">{notice.text}</div>
+    <div className={`dshsp-notice dshsp-notice-dismissable${notice.error ? ' dshsp-error' : ''}`} role="status">
+      <span>{notice.text}</span>
+      <button type="button" className="dshsp-notice-close" aria-label="关闭提示" title="关闭"
+        onClick={() => setNotice(undefined)}>×</button>
+    </div>
   )
 
   if (store.rows.length === 0) {
@@ -213,8 +235,9 @@ export function SpendingPage() {
           <div className={`dshsp-empty${dragging ? ' dshsp-drag' : ''}`} {...dropHandlers}>
             <SpendingIcon size={40} />
             <h2>导入银行账单</h2>
-            <p>将 CSV 账单文件拖放到这里（Nordea 格式：Transaction date; Title; Amount …），或点击<strong>导入 CSV…</strong>。<br />
-              可以导入多份账单，重复的记录会自动合并。</p>
+            <p>将 CSV 账单文件拖放到这里，或点击<strong>导入 CSV…</strong>。支持 Nordea 信用卡账单（如 Nordea Gold…csv）
+              和借记卡账单（Current Account…csv），按文件名区分。<br />
+              可以导入多份账单，重复的记录会自动合并；借记卡中给信用卡的还款（Nordea Bank Abp）不会重复计入支出。</p>
           </div>
         </div>
       </div>
@@ -283,10 +306,30 @@ export function SpendingPage() {
             <div className="dshsp-tile-value">{money(cashback)}</div>
             <div className="dshsp-tile-note">信用卡还款不计入消费</div>
           </div>
+          <div className="dshsp-tile">
+            <div className="dshsp-tile-label">总收入</div>
+            <div className="dshsp-tile-value">{money(income)}</div>
+            <div className="dshsp-tile-note">{hasDebit ? `${incomeInPeriod.length} 笔入账（借记卡）` : '导入借记卡账单后显示'}</div>
+          </div>
+          <div className="dshsp-tile">
+            <div className="dshsp-tile-label">月均收入</div>
+            <div className="dshsp-tile-value">{money(monthly(income))}</div>
+            <div className="dshsp-tile-note">{`按 ${days} 天折算`}</div>
+          </div>
+          <div className="dshsp-tile">
+            <div className="dshsp-tile-label">总盈余</div>
+            <div className={`dshsp-tile-value ${surplus < 0 ? 'dshsp-deficit' : 'dshsp-surplus'}`}>{money(surplus)}</div>
+            <div className="dshsp-tile-note">收入 − 全部分类消费</div>
+          </div>
+          <div className="dshsp-tile">
+            <div className="dshsp-tile-label">月均盈余</div>
+            <div className={`dshsp-tile-value ${surplus < 0 ? 'dshsp-deficit' : 'dshsp-surplus'}`}>{money(monthly(surplus))}</div>
+            <div className="dshsp-tile-note">{income > 0 ? `储蓄率 ${((surplus / income) * 100).toFixed(0)}%` : `按 ${days} 天折算`}</div>
+          </div>
         </div>
 
-        {entries.length === 0
-          ? <div className="dshsp-notice">该时间范围内没有消费记录。</div>
+        {entries.length === 0 && incomeInPeriod.length === 0
+          ? <div className="dshsp-notice">该时间范围内没有交易记录。</div>
           : (
             <div className="dshsp-grid">
               <section className="dshsp-card">
@@ -298,10 +341,19 @@ export function SpendingPage() {
               </section>
               <section className="dshsp-card">
                 <div className="dshsp-card-head">
-                  <h2 className="dshsp-card-title">{`消费趋势（按${GRANULARITIES.find(g => g[0] === granularity)[1]}）`}</h2>
-                  <span className="dshsp-card-sub">{isAll ? '全部分类' : active.map(catLabel).join('、')}</span>
+                  <h2 className="dshsp-card-title">
+                    {`${METRICS.find(m => m[0] === shownMetric)[1]}趋势（按${GRANULARITIES.find(g => g[0] === granularity)[1]}）`}
+                  </h2>
+                  {granularity !== 'week' && (
+                    <Segmented label="趋势指标" options={METRICS} value={metric} onChange={setMetric} />
+                  )}
+                  <span className="dshsp-card-sub">
+                    {shownMetric === 'income' ? '借记卡入账'
+                      : shownMetric === 'surplus' ? '收入 − 全部分类消费'
+                        : isAll ? '全部分类' : active.map(catLabel).join('、')}
+                  </span>
                 </div>
-                <TrendChart buckets={buckets} granularity={granularity} series={series} />
+                <TrendChart buckets={buckets} granularity={granularity} series={series} metric={shownMetric} />
               </section>
             </div>
           )}
@@ -318,13 +370,14 @@ export function SpendingPage() {
           <div className="dshsp-table-wrap">
             <table className="dshsp-table">
               <thead>
-                <tr><th>日期</th><th>商户</th><th>分类</th><th className="dshsp-num">金额</th></tr>
+                <tr><th>日期</th><th>商户</th><th>账户</th><th>分类</th><th className="dshsp-num">金额</th></tr>
               </thead>
               <tbody>
                 {pageRows.map((e, i) => (
-                  <tr key={`${e.date}|${e.title}|${e.amount}|${i}`}>
+                  <tr key={`${e.account}|${e.date}|${e.title}|${e.amount}|${i}`}>
                     <td>{e.date}</td>
                     <td className="dshsp-merchant" title={e.title}>{e.merchant}</td>
+                    <td className="dshsp-account">{ACCOUNT_LABELS[e.account ?? 'credit']}</td>
                     <td>
                       <select className="dshsp-select" value={e.category} aria-label={`${e.merchant} 的分类`}
                         onChange={ev => setOverride(e.merchant, ev.target.value)}>
