@@ -2,7 +2,7 @@
 // Workspace section) that opens a full spending dashboard in the main column.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, rangeCoversAll, rangeStart, spendingOf,
+  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
 } from './data.js'
 import { load, save } from './storage.js'
 import { CSS } from './styles.js'
@@ -13,7 +13,7 @@ const PANEL_ID = 'spending-insights'
 const STYLE_ID = 'dsh-spending-insights-style'
 const PAGE_SIZES = [20, 50, 100]
 
-const RANGES = [['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部']]
+const RANGES = [['lastmonth', '上个月'], ['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部']]
 const GRANULARITIES = [['week', '周'], ['month', '月'], ['year', '年']]
 
 function Segmented({ options, value, onChange, label, isDisabled, disabledTitle }) {
@@ -119,7 +119,17 @@ export function SpendingPage() {
   const earliest = all.length ? all.reduce((a, e) => (e.date < a ? e.date : a), all[0].date) : undefined
   const coversAll = r => r !== 'all' && rangeCoversAll(r, earliest, latest)
   const from = rangeStart(range, latest)
-  const inPeriod = useMemo(() => (from ? all.filter(e => e.date >= from) : all), [all, from])
+  const to = rangeEnd(range, latest)
+  const inRange = d => (!from || d >= from) && (!to || d <= to)
+  const inPeriod = useMemo(() => all.filter(e => inRange(e.date)), [all, from, to])
+  // Displayed period: the preset's bounds, narrowed to the imported data.
+  const periodStart = from && earliest && from > earliest ? from : earliest
+  const periodEnd = to && latest && to < latest ? to : latest
+
+  const selectRange = r => {
+    setRange(r)
+    if (r === 'lastmonth') setGranularity('week')
+  }
   const periodTotals = useMemo(() => categoryTotals(inPeriod), [inPeriod])
   const periodSum = periodTotals.reduce((a, t) => a + t.total, 0)
   const available = periodTotals.map(t => t.category)
@@ -134,8 +144,8 @@ export function SpendingPage() {
   const totals = useMemo(() => categoryTotals(entries), [entries])
   const buckets = useMemo(() => bucketize(entries, granularity), [entries, granularity])
   const cashback = useMemo(() => store.rows
-    .filter(r => r.kind === 'cashback' && (!from || r.date >= from))
-    .reduce((a, r) => a + r.amount, 0), [store.rows, from])
+    .filter(r => r.kind === 'cashback' && inRange(r.date))
+    .reduce((a, r) => a + r.amount, 0), [store.rows, from, to])
 
   /** Click on a category: from "all", isolate it; otherwise toggle it in the selection. */
   const toggleCategory = c => {
@@ -145,8 +155,7 @@ export function SpendingPage() {
   }
 
   const total = entries.reduce((a, e) => a + e.spend, 0)
-  const first = inPeriod.length ? inPeriod.reduce((a, e) => (e.date < a ? e.date : a), inPeriod[0].date) : undefined
-  const days = first && latest ? daysBetween(first, latest) : 0
+  const days = inPeriod.length ? daysBetween(periodStart, periodEnd) : 0
   const perMonth = days ? (total / days) * 30.44 : 0
   const purchases = entries.filter(e => e.spend > 0).length
   const top = totals[0]
@@ -221,14 +230,14 @@ export function SpendingPage() {
         <section className="dshsp-filters" aria-label="筛选">
           <div className="dshsp-filter-row">
             <span className="dshsp-label">时间范围</span>
-            <Segmented label="时间范围" options={RANGES} value={range} onChange={setRange}
+            <Segmented label="时间范围" options={RANGES} value={range} onChange={selectRange}
               isDisabled={coversAll}
               disabledTitle={`已导入的账单只覆盖 ${earliest} 至 ${latest}，此范围与「全部」相同。导入更早的账单后即可使用。`} />
             <span className="dshsp-label dshsp-gap">趋势粒度</span>
             <Segmented label="趋势粒度" options={GRANULARITIES} value={granularity} onChange={setGranularity} />
             {latest && (
               <span className="dshsp-label dshsp-push">
-                {`${from && from > earliest ? from : earliest} 至 ${latest}`}
+                {`${periodStart} 至 ${periodEnd}`}
                 {RANGES.some(([r]) => coversAll(r)) && `（账单数据自 ${earliest} 起）`}
               </span>
             )}
