@@ -1,10 +1,17 @@
 # dsh-spending-insights
 
-DeepSeek Harness plugin that adds a **消费分析** (Spending) entry to the left sidebar (the panel list above the Workspace section). It opens a dashboard (Chinese UI) built from a **folder of Nordea bank statement CSVs** — credit card statements (e.g. `Nordea Gold - ….csv`) and debit/current account statements (e.g. `Current Account.csv`), told apart by file name and analysed together. It also gives the DSH agent tools over the same data, so you can ask about your spending in any chat.
+DeepSeek Harness plugin that adds a **消费分析** (Spending) entry to the left sidebar (the panel list above the Workspace section). It opens a dashboard (Chinese UI) built from a **folder of Nordea bank statements**, analysed together:
+
+| File | Account |
+|---|---|
+| `Nordea Gold - ….csv` (CSV export) | credit card |
+| `…_Nordea Bank Abp_INVOICE.xml` (Finvoice e-invoice, one per billing month) | credit card |
+| `Current Account ….csv` (CSV export) | debit / current account |
+ It also gives the DSH agent tools over the same data, so you can ask about your spending in any chat.
 
 ## Statements folder
 
-Click **选择文件夹…** (native folder chooser) or **输入路径** (type a path, e.g. `~/Google Drive/账单`) and pick the folder holding your statements. A cloud-synced folder (Google Drive, iCloud, Dropbox) makes the same statements available on every machine. Every `*.csv` in the folder and one level of subfolders (e.g. one per year) is read; overlapping statements are de-duplicated. Add new statements to the folder and click **刷新**.
+Click **选择文件夹…** (native folder chooser) or **输入路径** (type a path, e.g. `~/Google Drive/账单`) and pick the folder holding your statements. A cloud-synced folder (Google Drive, iCloud, Dropbox) makes the same statements available on every machine. Every `*.csv` and `*.xml` in the folder and one level of subfolders (e.g. one per year) is read. Overlapping statements are de-duplicated, including a credit card CSV and XML invoices covering the same weeks: rows match on account, date and amount plus the title, ignoring the differences between the two exports (the CSV's `USD 5,90 ` prefix on foreign purchases, `*` characters, truncated titles, `Payment 05.10` vs `Payment`). Add new statements to the folder and click **刷新**.
 
 The folder path and your category changes are stored in `$DSH_HOME/storages/spending-insights.json` (default `~/.dsh/storages`), shared by all profiles on the machine. Category changes made by v0.1 in the browser are moved there automatically the first time the panel opens.
 
@@ -43,7 +50,7 @@ npm test          # data layer + host half (folder reading, Remote service, tool
 npm run build     # writes lib/client.js and lib/index.js
 ```
 
-Category rules live in `src/data.js` (`RULES`). The categories have a fixed order there, so each one keeps the same colour.
+Parsers (`parseStatement` for CSV, `parseFinvoice` for XML) and category rules (`RULES`) live in `src/data.js`. The categories have a fixed order there, so each one keeps the same colour.
 
 ## Install
 

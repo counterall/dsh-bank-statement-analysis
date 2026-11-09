@@ -252,7 +252,7 @@ export function SpendingPage() {
           {store.folder
             ? <>账单文件夹 <code className="dshsp-folder" title={store.folder}>{store.folder}</code>
               {` · ${store.files.length} 个文件 · ${store.rows.length} 条记录`}</>
-            : '根据银行账单 CSV 生成消费图表，数据仅保存在本机。'}
+            : '根据银行账单（CSV / XML）生成消费图表，数据仅保存在本机。'}
         </div>
       </div>
       <FolderControls folder={store.folder} busy={busy} onPick={pickFolder} onSetPath={setFolderPath}
@@ -281,16 +281,16 @@ export function SpendingPage() {
                 ? (
                   <>
                     <h2>文件夹中没有可识别的账单</h2>
-                    <p>把银行账单 CSV 放进 <code>{store.folder}</code>（可以放在一层子文件夹里，例如按年份），然后点击<strong>刷新</strong>。</p>
+                    <p>把银行账单（CSV 或 XML）放进 <code>{store.folder}</code>（可以放在一层子文件夹里，例如按年份），然后点击<strong>刷新</strong>。</p>
                   </>
                 )
                 : (
                   <>
                     <h2>选择账单文件夹</h2>
-                    <p>点击<strong>选择文件夹…</strong>，选择存放银行账单 CSV 的文件夹，例如 Google Drive 或 iCloud 同步的文件夹，
+                    <p>点击<strong>选择文件夹…</strong>，选择存放银行账单（CSV / XML）的文件夹，例如 Google Drive 或 iCloud 同步的文件夹，
                       这样在每台电脑上都能用同一份账单。以后有新账单时，放进这个文件夹再点<strong>刷新</strong>即可。<br />
-                      支持 Nordea 信用卡账单（如 Nordea Gold…csv）和借记卡账单（Current Account…csv），按文件名区分；
-                      重叠的账单会自动去重，借记卡中给信用卡的还款不会重复计入支出。</p>
+                      支持三种 Nordea 账单：信用卡 CSV（Nordea Gold…csv）、信用卡电子发票 XML（…_INVOICE.xml）和借记卡 CSV（Current Account…csv）；
+                      重叠的账单（包括同一时期的 CSV 和 XML）会自动去重，借记卡中给信用卡的还款不会重复计入支出。</p>
                   </>
                 )}
             </div>

@@ -126,3 +126,20 @@ test('host plugin exposes a Remote service and agent tools', async () => {
     else process.env.DSH_HOME = prev
   }
 })
+
+test('reads Finvoice XML in its declared ISO-8859-1 encoding next to CSVs', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'spending-xml-'))
+  const xml = '<?xml version="1.0" encoding="ISO-8859-1"?><Finvoice><InvoiceRow>'
+    + '<ArticleIdentifier>Retail FIN Espoo K-supermarket Leppävaa</ArticleIdentifier>'
+    + '<RowDeliveryDate Format="CCYYMMDD">20261027</RowDeliveryDate><RowAmount AmountCurrencyIdentifier="EUR">40,00</RowAmount>'
+    + '</InvoiceRow></Finvoice>'
+  await writeFile(join(dir, '2026-10_Nordea Bank Abp_INVOICE.xml'), Buffer.from(xml, 'latin1'))
+  await writeFile(join(dir, 'Nordea Gold - oct.csv'), HEADER + line('27.10.2026', 'Retail FIN Espoo K-supermarket Leppävaa', '-40.00')
+    + line('28.10.2026', 'Retail FIN Finland Wolt Oy', '-7.50'))
+  const { rows, files } = await readFolder(dir)
+  assert.deepEqual(files.map(f => [f.name, f.account, f.added]), [
+    ['2026-10_Nordea Bank Abp_INVOICE.xml', 'credit', 1],
+    ['Nordea Gold - oct.csv', 'credit', 1], // the K-supermarket purchase is already in the invoice
+  ])
+  assert.equal(rows.find(r => r.amount === -40).merchant, 'K-supermarket Leppävaa')
+})

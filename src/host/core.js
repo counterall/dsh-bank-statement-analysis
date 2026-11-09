@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promi
 import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import {
-  CATEGORIES, bucketize, bucketLabel, categoryTotals, daysBetween, incomeOf, mergeRows, parseStatement, spendingOf,
+  CATEGORIES, bucketize, bucketLabel, categoryTotals, daysBetween, incomeOf, mergeRows, parseStatementFile, spendingOf,
 } from '../data.js'
 import { CATEGORY_LABELS } from '../i18n.js'
 
@@ -44,21 +44,33 @@ export function sanitizeOverrides(o) {
 
 // ---- statements folder -----------------------------------------------------
 
+/** Text of a statement file: UTF-8, unless an XML prolog declares another charset (Finvoice uses ISO-8859-1). */
+export function decode(buf) {
+  const declared = /^\s*<\?xml[^>]*encoding=["']([\w.-]+)["']/i.exec(buf.subarray(0, 200).toString('latin1'))?.[1]
+  if (declared && !/^utf-?8$/i.test(declared)) {
+    try { return new TextDecoder(declared).decode(buf) } catch { /* unknown label: fall back to UTF-8 */ }
+  }
+  return buf.toString('utf8')
+}
+
 const MAX_DEPTH = 2 // the folder itself plus one level of subfolders (e.g. one per year)
 
-async function listCsv(dir, depth = 0) {
+/** Statement files: CSV exports and Finvoice XML invoices. */
+export const STATEMENT_FILE = /\.(csv|xml)$/i
+
+async function listStatements(dir, depth = 0) {
   const out = []
   for (const ent of await readdir(dir, { withFileTypes: true })) {
     if (ent.name.startsWith('.')) continue
     const p = join(dir, ent.name)
-    if (ent.isDirectory() && depth + 1 < MAX_DEPTH) out.push(...await listCsv(p, depth + 1))
-    else if (ent.isFile() && /\.csv$/i.test(ent.name)) out.push(p)
+    if (ent.isDirectory() && depth + 1 < MAX_DEPTH) out.push(...await listStatements(p, depth + 1))
+    else if (ent.isFile() && STATEMENT_FILE.test(ent.name)) out.push(p)
   }
   return out.sort()
 }
 
 /**
- * Read every CSV statement in `folder` and merge them (overlapping statements
+ * Read every statement (CSV or Finvoice XML) in `folder` and merge them (overlapping statements
  * are de-duplicated). A file that fails to parse is reported, not fatal.
  * @returns {Promise<{ rows: Array, files: Array<{name:string,account?:string,rows:number,added:number,skipped:number,error?:string}> }>}
  */
@@ -68,10 +80,10 @@ export async function readFolder(folder) {
   if (!info.isDirectory()) throw new Error(`不是文件夹：${folder}`)
   let rows = []
   const files = []
-  for (const path of await listCsv(folder)) {
+  for (const path of await listStatements(folder)) {
     const name = relative(folder, path)
     try {
-      const parsed = parseStatement(await readFile(path, 'utf8'), name)
+      const parsed = parseStatementFile(decode(await readFile(path)), name)
       const m = mergeRows(rows, parsed.rows)
       rows = m.merged
       files.push({ name, account: parsed.account, rows: parsed.rows.length, added: m.added, skipped: parsed.skipped })

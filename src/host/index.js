@@ -134,9 +134,9 @@ function tool(def) {
 
 async function dataOrHint(service) {
   const data = await service.load()
-  if (!data.folder) return { hint: 'No statements folder is set. Ask the user to open 消费分析 in the sidebar and choose the folder that holds their bank statement CSV files.' }
+  if (!data.folder) return { hint: 'No statements folder is set. Ask the user to open 消费分析 in the sidebar and choose the folder that holds their bank statement files (Nordea CSV exports or Finvoice XML invoices).' }
   if (data.error) return { hint: `The statements folder could not be read: ${data.error}` }
-  if (data.rows.length === 0) return { hint: `The statements folder (${data.folder}) contains no readable CSV statements.` }
+  if (data.rows.length === 0) return { hint: `The statements folder (${data.folder}) contains no readable statements (CSV or XML).` }
   return { data }
 }
 
