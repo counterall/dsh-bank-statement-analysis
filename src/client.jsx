@@ -11,6 +11,7 @@ import { clearLegacy, legacyOverrides } from './storage.js'
 import { CSS } from './styles.js'
 import { CategoryDonut, Swatch, TrendChart, money } from './charts.jsx'
 import { catLabel } from './i18n.js'
+import { PRESETS, askInWorkspace, bindWorkspaces, buildPrompt, lastWorkspace, useWorkspaces } from './ai.js'
 
 const PANEL_ID = 'spending-insights'
 const STYLE_ID = 'dsh-spending-insights-style'
@@ -90,6 +91,58 @@ function FolderControls({ folder, busy, onPick, onSetPath, onRefresh }) {
         </button>
       )}
     </div>
+  )
+}
+
+/**
+ * "问 AI": pick a Workspace, then a preset or your own question. Opens a new
+ * chat there with the question and the current filters in the composer.
+ */
+function AskAiCard({ filters }) {
+  const { available, items } = useWorkspaces()
+  const [chosen, setChosen] = useState(lastWorkspace)
+  const [question, setQuestion] = useState('')
+  const [error, setError] = useState(undefined)
+  if (!available) return null
+  const workspace = items.find(w => w.id === chosen) ?? items[0]
+  const ask = q => {
+    if (!q.trim() || !workspace) return
+    setError(undefined)
+    try {
+      askInWorkspace(workspace.id, buildPrompt(q, filters))
+      setQuestion('')
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
+  return (
+    <section className="dshsp-card dshsp-ai" aria-label="问 AI">
+      <div className="dshsp-card-head">
+        <h2 className="dshsp-card-title">问 AI</h2>
+        <span className="dshsp-card-sub">在所选工作区新建对话，问题和当前筛选条件会填入输入框，按回车发送</span>
+        <label className="dshsp-label dshsp-push">
+          工作区
+          {items.length
+            ? (
+              <select className="dshsp-select" value={workspace?.id} onChange={e => setChosen(e.target.value)} aria-label="在哪个工作区新建对话">
+                {items.map(w => <option key={w.id} value={w.id} title={w.path}>{w.label}</option>)}
+              </select>
+            )
+            : <span className="dshsp-more">（还没有工作区，请先在侧边栏添加）</span>}
+        </label>
+      </div>
+      <div className="dshsp-ai-presets" role="group" aria-label="常用问题">
+        {PRESETS.map(([label, q]) => (
+          <button key={label} type="button" className="dshsp-chip" disabled={!workspace} title={q} onClick={() => ask(q)}>{label}</button>
+        ))}
+      </div>
+      <form className="dshsp-ai-ask" onSubmit={e => { e.preventDefault(); ask(question) }}>
+        <input className="dshsp-input" value={question} onChange={e => setQuestion(e.target.value)}
+          placeholder="输入你的问题，例如：上个月餐饮比平时多吗？" aria-label="向 AI 提问" />
+        <button type="submit" className="dshsp-btn dshsp-btn-primary" disabled={!workspace || !question.trim()}>问 AI</button>
+      </form>
+      {error && <div className="dshsp-notice dshsp-error">{error}</div>}
+    </section>
   )
 }
 
@@ -384,6 +437,8 @@ export function SpendingPage() {
           </div>
         </div>
 
+        <AskAiCard filters={{ from: periodStart, to: periodEnd, categories: isAll ? [] : active, granularity }} />
+
         {entries.length === 0 && incomeInPeriod.length === 0
           ? <div className="dshsp-notice">该时间范围内没有交易记录。</div>
           : (
@@ -474,6 +529,7 @@ export const inject = ['slots']
 
 export function apply(ctx) {
   bindConnection(ctx)
+  bindWorkspaces(ctx)
 
   ctx.effect(() => {
     if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return () => {}

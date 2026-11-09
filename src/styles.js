@@ -61,6 +61,12 @@ body[data-ds-dark-theme] .dshsp-root {
 .dshsp-filter-row > .dshsp-label:first-child { line-height: 16px; padding-top: 2px; }
 .dshsp-gap { margin-left: 12px; }
 .dshsp-push { margin-left: auto; }
+.dshsp-ai { margin-bottom: 16px; }
+.dshsp-ai .dshsp-label { display: inline-flex; align-items: center; gap: 6px; }
+.dshsp-ai-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.dshsp-ai-presets .dshsp-chip:disabled { opacity: .5; cursor: default; }
+.dshsp-ai-ask { display: flex; gap: 8px; }
+.dshsp-ai-ask .dshsp-input { flex: 1; width: auto; }
 .dshsp-pager { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; margin-top: 10px; }
 .dshsp-pager .dshsp-more { margin: 0; }
 .dshsp-pager-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }

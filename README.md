@@ -25,6 +25,10 @@ The folder path and your category changes are stored in `$DSH_HOME/storages/spen
 
 Try e.g. “上个月我在餐饮上花了多少？和之前比呢？” or “帮我把「其他」里的商户归类”.
 
+### 问 AI (from the dashboard)
+
+The **问 AI** card under the tiles starts a chat without leaving the plugin: choose a **工作区** (Workspace) for the new session, then click a preset (总结消费, 节省建议, 环比变化, 归类「其他」, 异常检查) or type a question. DSH switches to a new session in that Workspace with the question and the dashboard's current filters (period, categories, granularity) in the composer; review it and press Enter to send. The last chosen Workspace is remembered. This uses the Web Client's own navigation (`ctx.uiWorkspace.startSession(workspaceId, { prompt })`, after `ctx.layout.selectPanel(null)` returns the main area to the Conversation).
+
 ## Dashboard
 
 - one global filter bar above the charts: period (last month/3M/6M/12M/YTD/All; picking last month switches the trend to weekly), trend granularity (week/month/year), and multi-select categories with their amounts. The filters apply to every chart, tile and the table. Periods count back from the latest imported transaction; presets that would include all imported data anyway (e.g. 12M when the statement only covers 2 months) are disabled, with a hint showing the data coverage.

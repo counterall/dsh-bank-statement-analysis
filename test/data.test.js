@@ -202,3 +202,13 @@ test('the same card transaction in a CSV and an XML invoice is merged', () => {
   // A debit row with the same date, amount and title is a different transaction.
   assert.equal(mergeRows(xml, [{ ...xml[1], account: 'debit' }]).added, 1)
 })
+
+test('问 AI prompt carries the question and the current filters', async () => {
+  const { buildPrompt, PRESETS } = await import('../src/prompt.js')
+  const p = buildPrompt('  上个月餐饮多吗？ ', { from: '2026-10-01', to: '2026-10-31', categories: ['Restaurants & cafés', 'Groceries'], granularity: 'week' })
+  assert.match(p, /^上个月餐饮多吗？\n（来自/)
+  assert.match(p, /2026-10-01 至 2026-10-31，餐饮外卖、日用杂货，趋势按周/)
+  assert.match(p, /spending_overview/)
+  assert.match(buildPrompt('x', { from: 'a', to: 'b', categories: [], granularity: 'month' }), /全部分类，趋势按月/)
+  assert.ok(PRESETS.find(([l]) => l === '归类「其他」')[1].includes('等我确认'))
+})
