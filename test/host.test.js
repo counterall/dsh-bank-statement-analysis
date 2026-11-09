@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import {
   loadSettings, overview, readFolder, resolveCategory, saveSettings, storePath, transactions,
 } from '../src/host/core.js'
-import { apply } from '../src/host/index.js'
+import { apply, chooseFolderMac } from '../src/host/index.js'
 
 const HEADER = 'Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
 const line = (d, title, amount) => `"${d}";"${d}";"${title}";"${amount}";"EUR";;;;;;\n`
@@ -120,7 +120,12 @@ test('host plugin exposes a Remote service and agent tools', async () => {
 
     await svc.importOverrides({ 'Wolt Oy': 'Groceries', X: 'Bogus' })
     assert.deepEqual((await svc.state()).overrides, { 'Wolt Oy': 'Groceries' })
-    assert.deepEqual(await svc.pickFolder(undefined), { supported: false, folder: null })
+
+    // DSH's native picker is used through its capability object.
+    const picked = await folder()
+    ctx.injected.directoryPicker({ directoryPicker: { capability: () => ({ kind: 'native', pick: async () => picked }) }, effect: fn => fn() })
+    assert.deepEqual(await svc.pickFolder(undefined), { supported: true, folder: picked })
+    assert.equal((await svc.state()).folder, picked)
   } finally {
     if (prev === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prev
@@ -142,4 +147,12 @@ test('reads Finvoice XML in its declared ISO-8859-1 encoding next to CSVs', asyn
     ['Nordea Gold - oct.csv', 'credit', 1], // the K-supermarket purchase is already in the invoice
   ])
   assert.equal(rows.find(r => r.amount === -40).merchant, 'K-supermarket Leppävaa')
+})
+
+test('macOS chooser: POSIX path without trailing slash, null on cancel', async () => {
+  const fake = (stdout, error) => (_cmd, args, _opts, cb) => { assert.match(args[1], /choose folder/); cb(error, stdout) }
+  assert.equal(await chooseFolderMac(undefined, fake('/Users/me/账单/\n')), '/Users/me/账单')
+  const cancel = Object.assign(new Error('execution error: User canceled. (-128)'), { stderr: '' })
+  assert.equal(await chooseFolderMac(undefined, fake('', cancel)), null)
+  await assert.rejects(chooseFolderMac(undefined, fake('', new Error('boom'))), /boom/)
 })

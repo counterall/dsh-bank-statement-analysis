@@ -19,11 +19,31 @@ import {
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { execFile } from 'node:child_process'
 
 export const name = 'dsh-spending-insights'
 
 const SERVICE = 'spendingInsights'
 const REMOTE_METHODS = '@deepseek-ai/dsh-typert-protocol/remote-methods'
+
+/**
+ * macOS folder chooser via AppleScript, attached to the frontmost app (DSH) so
+ * it opens in front. Resolves the POSIX path, or null when cancelled.
+ */
+export function chooseFolderMac(signal, run = execFile) {
+  const script = 'tell application (path to frontmost application as text) to return POSIX path of (choose folder with prompt "选择存放银行账单的文件夹")'
+  return new Promise((resolvePath, reject) => {
+    run('osascript', ['-e', script], { signal }, (error, stdout) => {
+      if (error) {
+        if (/-128|User canceled/i.test(`${error.message}${error.stderr ?? ''}`)) resolvePath(null)
+        else reject(error)
+        return
+      }
+      const p = String(stdout).trim().replace(/\/+$/, '')
+      resolvePath(p || null)
+    })
+  })
+}
 
 const expandHome = p => (p === '~' ? homedir() : p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : p)
 
@@ -68,11 +88,17 @@ class SpendingInsights {
     return this.load()
   }
 
-  /** Open the host's native folder chooser; `supported: false` when this host has none. */
+  /**
+   * Open a native folder chooser on the host: DSH's own `native` directory
+   * picker when composed, else the macOS chooser directly. `supported: false`
+   * (e.g. a remote browser on Linux) makes the widget ask for a typed path.
+   */
   async pickFolder(signal) {
-    const pick = this.picker?.pick
-    if (typeof pick !== 'function') return { supported: false, folder: null }
-    const folder = await pick.call(this.picker, signal)
+    const capability = this.picker?.capability?.()
+    let folder
+    if (capability?.kind === 'native' && typeof capability.pick === 'function') folder = await capability.pick(signal)
+    else if (process.platform === 'darwin') folder = await chooseFolderMac(signal)
+    else return { supported: false, folder: null }
     if (!folder) return { supported: true, folder: null }
     await this.mutate(s => ({ ...s, folder }))
     return { supported: true, folder }
