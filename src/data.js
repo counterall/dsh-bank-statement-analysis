@@ -88,7 +88,7 @@ export function merchantOf(title) {
   let t = title.replace(/^[A-Z]{3} [\d.,]+ /, '')
   const m = /^(Retail|Credit|Debit|Purchase|Refund)\s+([A-Z]{3})\s+(\S+)\s+(.+)$/.exec(t)
   if (m) t = m[4]
-  return t.trim()
+  return t.replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -166,26 +166,102 @@ export function parseStatement(text, fileName = '') {
   return { account, rows, skipped }
 }
 
-// Rows stored before debit support carry no account: they are credit card rows.
-const rowKey = r => `${r.account ?? 'credit'}|${r.date}|${r.title}|${r.amount}`
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+const unescapeXml = s => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+  if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1)))
+  return XML_ENTITIES[e.toLowerCase()] ?? m
+})
+const xmlField = (block, tag) => {
+  const m = new RegExp(`<${tag}(?:\\s[^>]*)?>([^<]*)</${tag}>`).exec(block)
+  return m ? unescapeXml(m[1]).trim() : undefined
+}
 
 /**
- * Merge newly imported rows into the stored ones. Identical rows (same date,
- * title, amount) are counted per file, so re-importing an overlapping
- * statement adds nothing while two genuinely identical purchases survive.
+ * Parse a Nordea credit card invoice in Finvoice XML ("…_Nordea Bank Abp_INVOICE.xml").
+ * Each InvoiceRow is one card transaction, with the invoice's sign (purchases
+ * positive, payments and credits negative); amounts are flipped to the CSV
+ * convention (purchases negative). The "Total Balance" summary row has no
+ * date and is ignored.
+ * @returns {{ account: 'credit', rows: Array, skipped: number }}
+ */
+export function parseFinvoice(xml) {
+  if (!/<Finvoice[\s>]/.test(xml)) throw new Error('Not a Finvoice e-invoice XML file.')
+  const account = 'credit'
+  const rows = []
+  let skipped = 0
+  for (const [, block] of xml.matchAll(/<InvoiceRow>([\s\S]*?)<\/InvoiceRow>/g)) {
+    const title = xmlField(block, 'ArticleIdentifier') ?? ''
+    if (/^total balance$/i.test(title)) continue
+    const d = /^(\d{4})(\d{2})(\d{2})$/.exec(xmlField(block, 'RowDeliveryDate') ?? '')
+    const raw = xmlField(block, 'RowAmount')
+    const value = raw === undefined ? undefined : parseAmount(raw)
+    if (!d || value === undefined || !title) { skipped++; continue }
+    const amount = value === 0 ? 0 : -value
+    const currency = /<RowAmount\s[^>]*AmountCurrencyIdentifier="([A-Z]{3})"/.exec(block)?.[1] ?? 'EUR'
+    rows.push({
+      date: `${d[1]}-${d[2]}-${d[3]}`,
+      title,
+      merchant: merchantOf(title),
+      amount,
+      currency,
+      kind: kindOf(title, amount, account),
+      account,
+    })
+  }
+  return { account, rows, skipped }
+}
+
+/** Parse any supported statement file: CSV (credit card or current account) or Finvoice XML (credit card). */
+export function parseStatementFile(text, fileName = '') {
+  if (/\.xml$/i.test(fileName) || /^\s*<\?xml/.test(text)) return parseFinvoice(text)
+  return parseStatement(text, fileName)
+}
+
+// Rows stored before debit support carry no account: they are credit card rows.
+const groupKey = r => `${r.account ?? 'credit'}|${r.date}|${r.amount}`
+
+/**
+ * Title reduced to what both Nordea exports agree on: the CSV prefixes foreign
+ * purchases with the original amount ("USD 5,90 Retail …") and keeps "*",
+ * the XML invoice drops both; card payments read "Payment 05.10" vs "Payment".
+ */
+export function titleKey(title) {
+  const t = title.replace(/^[A-Z]{3} [\d.,]+ /, '')
+  if (/^payment\b/i.test(t)) return 'payment'
+  return t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+}
+
+/** Same transaction? Titles must agree, except that one export may truncate a long title. */
+function sameTitle(a, b) {
+  if (a === b) return true
+  const [short, long] = a.length < b.length ? [a, b] : [b, a]
+  return short.length >= 8 && long.startsWith(short)
+}
+
+/**
+ * Merge rows read from one more statement file into the rows so far. A row
+ * matching an earlier one (same account, date and amount, and the same title
+ * up to the differences between the CSV and XML exports) is the same
+ * transaction from an overlapping statement, so it is skipped. Each earlier
+ * row absorbs at most one match, and rows from the same file never absorb
+ * each other, so genuinely identical purchases survive.
  * @returns {{ merged: Array, added: number }}
  */
 export function mergeRows(existing, incoming) {
-  const have = new Map()
-  for (const r of existing) have.set(rowKey(r), (have.get(rowKey(r)) ?? 0) + 1)
-  const seen = new Map()
+  const pool = new Map()
+  for (const r of existing) {
+    const k = groupKey(r)
+    if (!pool.has(k)) pool.set(k, [])
+    pool.get(k).push(titleKey(r.title))
+  }
   const merged = [...existing]
   let added = 0
   for (const r of incoming) {
-    const k = rowKey(r)
-    const n = (seen.get(k) ?? 0) + 1
-    seen.set(k, n)
-    if (n > (have.get(k) ?? 0)) { merged.push(r); added++ }
+    const candidates = pool.get(groupKey(r))
+    const t = titleKey(r.title)
+    const i = candidates ? candidates.findIndex(c => c !== undefined && sameTitle(c, t)) : -1
+    if (i >= 0) candidates[i] = undefined // consumed
+    else { merged.push(r); added++ }
   }
   merged.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
   return { merged, added }

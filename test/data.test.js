@@ -2,9 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   bucketize, bucketLabel, categorize, categoryTotals, merchantOf, mergeRows,
-  accountOf, incomeOf, parseAmount, parseDate, parseStatement, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
+  accountOf, incomeOf, parseAmount, parseDate, parseFinvoice, parseStatement, parseStatementFile, rangeCoversAll, rangeEnd, rangeStart, spendingOf, titleKey,
 } from '../src/data.js'
 
+const HEADER_CSV = 'Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
 const SAMPLE = '﻿Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
   + '"3.11.2026";"3.11.2026";"Retail FIN Espoo Prisma Iso Omena";"-42.10";"EUR";;;;;;\n'
   + '"3.11.2026";"3.11.2026";"Payment 03.11";"500.00";"EUR";;;;;;\n'
@@ -150,4 +151,54 @@ test('buckets carry income and span income-only periods', () => {
   assert.deepEqual(b.map(x => [x.start, x.income, x.total]), [['2026-10-01', 2500, 60], ['2026-11-01', 0, 10]])
   const only = bucketize([], 'month', incomeOf(rows))
   assert.equal(only.length, 1)
+})
+
+const FINVOICE = '<?xml version="1.0" encoding="ISO-8859-1"?><Finvoice>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Payment</ArticleIdentifier>\n<RowDeliveryDate Format="CCYYMMDD">20261005</RowDeliveryDate>\n'
+  + '<RowAmount AmountCurrencyIdentifier="EUR">-500,00</RowAmount>\n</InvoiceRow>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Retail FIN Espoo K-supermarket Lepp&#228;vaa</ArticleIdentifier>\n<ArticleName>5225-**</ArticleName>\n'
+  + '<RowDeliveryDate Format="CCYYMMDD">20261003</RowDeliveryDate>\n<RowVatExcludedAmount AmountCurrencyIdentifier="EUR">12,30</RowVatExcludedAmount>\n'
+  + '<RowAmount AmountCurrencyIdentifier="EUR">12,30</RowAmount>\n</InvoiceRow>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Retail IRL Dublin WLGOOGLE  YouTubePrem</ArticleIdentifier>\n<RowDeliveryDate Format="CCYYMMDD">20261001</RowDeliveryDate>\n'
+  + '<RowAmount AmountCurrencyIdentifier="EUR">16,99</RowAmount>\n</InvoiceRow>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Retail USA SEATTLE AMAZON DIGI 590FS8JB2</ArticleIdentifier>\n<RowDeliveryDate Format="CCYYMMDD">20261008</RowDeliveryDate>\n'
+  + '<RowAmount AmountCurrencyIdentifier="EUR">5,41</RowAmount>\n</InvoiceRow>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Credit FIN Nordea Cashback</ArticleIdentifier>\n<RowDeliveryDate Format="CCYYMMDD">20260930</RowDeliveryDate>\n'
+  + '<RowAmount AmountCurrencyIdentifier="EUR">-4,47</RowAmount>\n</InvoiceRow>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Credit FIN VANTAA IKEA VANTAA RETURN</ArticleIdentifier>\n<RowDeliveryDate Format="CCYYMMDD">20260912</RowDeliveryDate>\n'
+  + '<RowAmount AmountCurrencyIdentifier="EUR">-7,99</RowAmount>\n</InvoiceRow>\n'
+  + '<InvoiceRow>\n<ArticleIdentifier>Total Balance</ArticleIdentifier>\n<RowAmount AmountCurrencyIdentifier="EUR">500,00</RowAmount>\n</InvoiceRow>\n'
+  + '</Finvoice>\n'
+
+test('Finvoice XML invoice: credit card rows with CSV sign convention', () => {
+  const { account, rows, skipped } = parseStatementFile(FINVOICE, '2026-10_Nordea Bank Abp_INVOICE.xml')
+  assert.equal(account, 'credit')
+  assert.equal(skipped, 0)
+  assert.deepEqual(rows.map(r => [r.date, r.amount, r.kind]), [
+    ['2026-10-05', 500, 'payment'],
+    ['2026-10-03', -12.3, 'purchase'],
+    ['2026-10-01', -16.99, 'purchase'],
+    ['2026-10-08', -5.41, 'purchase'],
+    ['2026-09-30', 4.47, 'cashback'],
+    ['2026-09-12', 7.99, 'refund'],
+  ])
+  assert.equal(rows[1].merchant, 'K-supermarket Leppävaa')
+  assert.equal(rows[2].merchant, 'WLGOOGLE YouTubePrem')
+  assert.throws(() => parseFinvoice('<?xml version="1.0"?><Invoice/>'), /Finvoice/)
+})
+
+test('the same card transaction in a CSV and an XML invoice is merged', () => {
+  const csv = parseStatement(HEADER_CSV
+    + '"5.10.2026";"5.10.2026";"Payment 05.10";"500.00";"EUR";;;;;;\n'
+    + '"3.10.2026";"3.10.2026";"Retail FIN Espoo K-supermarket Leppävaa";"-12.30";"EUR";;;;;;\n'
+    + '"1.10.2026";"1.10.2026";"Retail IRL Dublin WL*GOOGLE YouTubePrem";"-16.99";"EUR";;;;;;\n'
+    + '"8.10.2026";"8.10.2026";"USD 5,90 Retail USA SEATTLE AMAZON DIGI* 5";"-5.41";"EUR";;;;;;\n'
+    + '"8.10.2026";"8.10.2026";"Retail FIN Espoo Prisma";"-5.41";"EUR";;;;;;\n', 'Nordea Gold.csv').rows
+  const xml = parseFinvoice(FINVOICE).rows
+  const { merged, added } = mergeRows(xml, csv)
+  assert.equal(added, 1) // only the Prisma purchase is new: same date and amount, different title
+  assert.equal(merged.length, xml.length + 1)
+  assert.equal(titleKey('USD 5,90 Retail USA SEATTLE AMAZON DIGI* 5'), 'retailusaseattleamazondigi5')
+  // A debit row with the same date, amount and title is a different transaction.
+  assert.equal(mergeRows(xml, [{ ...xml[1], account: 'debit' }]).added, 1)
 })

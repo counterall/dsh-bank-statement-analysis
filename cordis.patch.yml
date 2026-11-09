@@ -1,5 +1,6 @@
-# Bundle patch layer: the row loads lib/index.js as the (no-op) host half;
-# the `dsh.client` declaration in package.json makes the web app load
+# Bundle patch layer: the row loads lib/index.js as the host half (statements
+# folder, the `spendingInsights` Remote service and the agent tools); the
+# `dsh.client` declaration in package.json makes the web app load
 # lib/client.js as the browser half, which adds the sidebar entry and panel.
 - insert:
     - id: dsh-spending-insights
