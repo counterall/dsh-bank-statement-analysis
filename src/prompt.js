@@ -13,11 +13,11 @@ export const PRESETS = [
  * The question plus the dashboard's current filters, so the agent queries the
  * same period and categories the user is looking at.
  */
-export function buildPrompt(question, { from, to, categories, granularity }) {
+export function buildPrompt(question, { from, to, categories, granularity, currency = 'EUR' }) {
   const unit = { week: '周', month: '月', year: '年' }[granularity] ?? '月'
   const scope = categories?.length ? categories.map(catLabel).join('、') : '全部分类'
   return `${question.trim()}\n`
     + `（来自「消费分析」面板。当前筛选：${from} 至 ${to}，${scope}，趋势按${unit}。`
-    + '请使用 spending_overview 和 spending_transactions 工具查询我的银行账单数据，'
-    + '日期用 YYYY-MM-DD，金额单位为欧元，用中文回答。）'
+    + '请使用 spending_overview 和 spending_transactions 工具查询我的账单数据，'
+    + `日期用 YYYY-MM-DD，金额用${currency === 'CNY' ? '人民币（currency 参数传 CNY）' : '欧元（currency 参数传 EUR）'}，用中文回答。）`
 }

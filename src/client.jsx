@@ -9,7 +9,7 @@ import {
 import { bindConnection, call } from './remote.js'
 import { clearLegacy, legacyOverrides } from './storage.js'
 import { CSS } from './styles.js'
-import { CategoryDonut, Swatch, TrendChart, money } from './charts.jsx'
+import { CategoryDonut, Swatch, TrendChart, money, setMoneyCurrency } from './charts.jsx'
 import { catLabel } from './i18n.js'
 import { PRESETS, askInWorkspace, bindWorkspaces, buildPrompt, lastWorkspace, useWorkspaces } from './ai.js'
 
@@ -20,7 +20,8 @@ const PAGE_SIZES = [20, 50, 100]
 const RANGES = [['lastmonth', '上个月'], ['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部'], ['custom', '自定义']]
 const GRANULARITIES = [['week', '周'], ['month', '月'], ['year', '年']]
 const METRICS = [['income', '收入'], ['spend', '支出'], ['surplus', '盈余']]
-const ACCOUNT_LABELS = { credit: '信用卡', debit: '借记卡' }
+const ACCOUNT_LABELS = { credit: '信用卡', debit: '借记卡', alipay: '支付宝' }
+const CURRENCIES = [['EUR', '€ 欧元'], ['CNY', '¥ 人民币']]
 
 function Segmented({ options, value, onChange, label, isDisabled, disabledTitle }) {
   return (
@@ -64,8 +65,22 @@ export function SpendingIcon({ size = 20 }) {
   )
 }
 
-const EMPTY = { folder: null, overrides: {}, rows: [], files: [] }
+const EMPTY = { folder: null, overrides: {}, currency: 'EUR', rows: [], files: [] }
 const errorText = e => (e instanceof Error ? e.message : String(e))
+
+/** "汇率 1 € = ¥7.4485（欧洲央行，2026-11-06）" for the currencies the statements use. */
+function rateText(data) {
+  const r = data.rate
+  if (!r) return ''
+  const others = Object.keys(r.rates).filter(c => c !== 'EUR')
+  const pairs = others.map(c => `1 € = ${Number(r.rates[c].toFixed(4))} ${c === 'CNY' ? '元' : c}`)
+  const when = r.date ? `，${r.date}` : ''
+  return `汇率 ${pairs.join('，')}（${r.source}${when}）${r.stale ? ' · 获取最新汇率失败，使用上次的汇率' : ''}`
+}
+
+function unconvertedNotice(data) {
+  return { error: true, text: `无法获取汇率，${data.unconverted.join('、')} 账单暂未计入。请检查网络后点击刷新。` }
+}
 
 function readSummary(data) {
   const ok = data.files.filter(f => !f.error)
@@ -190,6 +205,7 @@ export function SpendingPage() {
       if (!mounted.current) return
       setStore(data)
       if (data.error) setNotice({ error: true, text: `无法读取账单文件夹：${data.error}` })
+      else if (data.unconverted) setNotice(unconvertedNotice(data))
       else if (announce && data.folder) setNotice(readSummary(data))
     } catch (e) {
       if (mounted.current) setNotice({ error: true, text: `读取失败：${errorText(e)}` })
@@ -224,6 +240,22 @@ export function SpendingPage() {
     }
   }
 
+  const changeCurrency = async currency => {
+    if (currency === store.currency) return
+    setBusy(true)
+    try {
+      const r = await call('setCurrency', { currency })
+      if (!r.ok) throw new Error(r.error)
+      if (!mounted.current) return
+      setStore(r.state)
+      setNotice(r.state.unconverted ? unconvertedNotice(r.state) : undefined)
+    } catch (e) {
+      if (mounted.current) setNotice({ error: true, text: `切换货币失败：${errorText(e)}` })
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }
+
   const setFolderPath = async path => {
     try {
       const r = await call('setFolder', { folder: path })
@@ -235,6 +267,8 @@ export function SpendingPage() {
       return false
     }
   }
+
+  setMoneyCurrency(store.currency) // every amount below is in the display currency
 
   // Period filter first (gives the per-category amounts shown in the filter bar),
   // then the category filter, which every chart, tile and the table share.
@@ -327,11 +361,16 @@ export function SpendingPage() {
           {store.folder
             ? <>账单文件夹 <code className="dshsp-folder" title={store.folder}>{store.folder}</code>
               {` · ${store.files.length} 个文件 · ${store.rows.length} 条记录`}</>
-            : '根据银行账单（CSV / XML）生成消费图表，数据仅保存在本机。'}
+            : '根据银行账单（CSV / XML）和支付宝账单生成消费图表，数据仅保存在本机。'}
         </div>
+        {store.rate && <div className="dshsp-rate">{rateText(store)}</div>}
       </div>
-      <FolderControls folder={store.folder} busy={busy} onPick={pickFolder} onSetPath={setFolderPath}
-        onRefresh={() => refresh(true)} />
+      <div className="dshsp-actions">
+        <Segmented label="显示货币" options={CURRENCIES} value={store.currency} onChange={changeCurrency}
+          isDisabled={() => busy} />
+        <FolderControls folder={store.folder} busy={busy} onPick={pickFolder} onSetPath={setFolderPath}
+          onRefresh={() => refresh(true)} />
+      </div>
     </div>
   )
 
@@ -356,7 +395,7 @@ export function SpendingPage() {
                 ? (
                   <>
                     <h2>文件夹中没有可识别的账单</h2>
-                    <p>把银行账单（CSV 或 XML）放进 <code>{store.folder}</code>（可以放在一层子文件夹里，例如按年份），然后点击<strong>刷新</strong>。</p>
+                    <p>把银行账单（CSV 或 XML）或支付宝账单放进 <code>{store.folder}</code>（可以放在一层子文件夹里，例如按年份），然后点击<strong>刷新</strong>。</p>
                   </>
                 )
                 : (
@@ -364,7 +403,8 @@ export function SpendingPage() {
                     <h2>选择账单文件夹</h2>
                     <p>点击<strong>选择文件夹…</strong>，选择存放银行账单（CSV / XML）的文件夹，例如 Google Drive 或 iCloud 同步的文件夹，
                       这样在每台电脑上都能用同一份账单。以后有新账单时，放进这个文件夹再点<strong>刷新</strong>即可。<br />
-                      支持三种 Nordea 账单：信用卡 CSV（Nordea Gold…csv）、信用卡电子发票 XML（…_INVOICE.xml）和借记卡 CSV（Current Account…csv）；
+                      支持 Nordea 信用卡 CSV（Nordea Gold…csv）、信用卡电子发票 XML（…_INVOICE.xml）、借记卡 CSV（Current Account…csv），
+                      以及支付宝账单 CSV（Alipay…csv，人民币，可在页面右上角切换显示为欧元或人民币）；
                       重叠的账单（包括同一时期的 CSV 和 XML）会自动去重，借记卡中给信用卡的还款不会重复计入支出。</p>
                   </>
                 )}
@@ -381,7 +421,7 @@ export function SpendingPage() {
         {header}
         {noticeEl}
 
-        <AskAiCard filters={{ from: periodStart, to: periodEnd, categories: isAll ? [] : active, granularity }} />
+        <AskAiCard filters={{ from: periodStart, to: periodEnd, categories: isAll ? [] : active, granularity, currency: store.currency }} />
 
         <section className="dshsp-filters" aria-label="筛选">
           <div className="dshsp-filter-row">
@@ -521,7 +561,10 @@ export function SpendingPage() {
                         {CATEGORIES.map(c => <option key={c} value={c}>{catLabel(c)}</option>)}
                       </select>
                     </td>
-                    <td className={`dshsp-num${e.spend < 0 ? ' dshsp-refund' : ''}`}>{money(e.spend)}</td>
+                    <td className={`dshsp-num${e.spend < 0 ? ' dshsp-refund' : ''}`}>
+                      {money(e.spend)}
+                      {e.original && <span className="dshsp-orig">{money(-e.original.amount, e.original.currency)}</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

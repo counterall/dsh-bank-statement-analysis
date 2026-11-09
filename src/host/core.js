@@ -5,7 +5,8 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promi
 import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import {
-  CATEGORIES, bucketize, bucketLabel, categoryTotals, daysBetween, incomeOf, mergeRows, parseStatementFile, spendingOf,
+  CATEGORIES, DISPLAY_CURRENCIES, bucketize, bucketLabel, categoryTotals, daysBetween, incomeOf, mergeRows, parseStatementFile,
+  spendingOf,
 } from '../data.js'
 import { CATEGORY_LABELS } from '../i18n.js'
 
@@ -20,14 +21,20 @@ export function storePath(env = process.env) {
 export async function loadSettings(file) {
   try {
     const v = JSON.parse(await readFile(file, 'utf8'))
-    return {
+    const settings = {
       folder: typeof v.folder === 'string' && v.folder ? v.folder : null,
       overrides: v.overrides && typeof v.overrides === 'object' ? sanitizeOverrides(v.overrides) : {},
+      currency: DISPLAY_CURRENCIES.includes(v.currency) ? v.currency : 'EUR',
     }
+    if (validRates(v.lastRates)) settings.lastRates = v.lastRates
+    return settings
   } catch {
-    return { folder: null, overrides: {} }
+    return { folder: null, overrides: {}, currency: 'EUR' }
   }
 }
+
+const validRates = r => Boolean(r && typeof r === 'object' && r.rates && typeof r.rates === 'object'
+  && Object.values(r.rates).every(x => typeof x === 'number' && x > 0))
 
 export async function saveSettings(file, settings) {
   await mkdir(dirname(file), { recursive: true })
@@ -44,13 +51,58 @@ export function sanitizeOverrides(o) {
 
 // ---- statements folder -----------------------------------------------------
 
-/** Text of a statement file: UTF-8, unless an XML prolog declares another charset (Finvoice uses ISO-8859-1). */
+/**
+ * Text of a statement file: the charset an XML prolog declares (Finvoice uses
+ * ISO-8859-1), else UTF-8, else GB18030 (a superset of the GBK that Alipay
+ * exports use).
+ */
 export function decode(buf) {
   const declared = /^\s*<\?xml[^>]*encoding=["']([\w.-]+)["']/i.exec(buf.subarray(0, 200).toString('latin1'))?.[1]
   if (declared && !/^utf-?8$/i.test(declared)) {
     try { return new TextDecoder(declared).decode(buf) } catch { /* unknown label: fall back to UTF-8 */ }
   }
-  return buf.toString('utf8')
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch {
+    try { return new TextDecoder('gb18030').decode(buf) } catch { return buf.toString('utf8') }
+  }
+}
+
+// ---- exchange rates --------------------------------------------------------
+
+/**
+ * Latest rates for `currencies`, as units per 1 EUR. ECB reference rates
+ * (published each working day) from frankfurter.dev, falling back to
+ * open.er-api.com (daily).
+ * @returns {Promise<{ rates: Record<string, number>, date: string, source: string, fetchedAt: number }>}
+ */
+export async function fetchRates(currencies, fetchImpl = globalThis.fetch, timeoutMs = 8000) {
+  const wanted = [...new Set(currencies)].filter(c => c !== 'EUR')
+  const pick = (all, date, source) => {
+    const rates = { EUR: 1 }
+    for (const c of wanted) {
+      if (!(typeof all[c] === 'number' && all[c] > 0)) throw new Error(`no ${c} rate from ${source}`)
+      rates[c] = all[c]
+    }
+    return { rates, date, source, fetchedAt: Date.now() }
+  }
+  if (wanted.length === 0) return { rates: { EUR: 1 }, date: null, source: 'none', fetchedAt: Date.now() }
+  const get = async url => {
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`)
+    return res.json()
+  }
+  const errors = []
+  try {
+    const j = await get(`https://api.frankfurter.dev/v1/latest?base=EUR&symbols=${wanted.join(',')}`)
+    return pick(j.rates ?? {}, j.date, '欧洲央行（frankfurter.dev）')
+  } catch (e) { errors.push(e instanceof Error ? e.message : String(e)) }
+  try {
+    const j = await get('https://open.er-api.com/v6/latest/EUR')
+    const date = j.time_last_update_unix ? new Date(j.time_last_update_unix * 1000).toISOString().slice(0, 10) : null
+    return pick(j.rates ?? {}, date, 'open.er-api.com')
+  } catch (e) { errors.push(e instanceof Error ? e.message : String(e)) }
+  throw new Error(`无法获取汇率：${errors.join('；')}`)
 }
 
 const MAX_DEPTH = 2 // the folder itself plus one level of subfolders (e.g. one per year)
@@ -165,8 +217,9 @@ export function overview(rows, overrides, opts = {}) {
   }
   const ranked = [...merchants.values()].map(m => ({ ...m, total: round(m.total) })).sort((a, b) => b.total - a.total)
 
+  const currency = opts.currency ?? 'EUR'
   return {
-    currency: 'EUR',
+    currency,
     dataCoverage: { earliest: p.earliest ?? null, latest: p.latest ?? null },
     period: { from: p.start ?? null, to: p.end ?? null, days },
     totals: {
@@ -183,7 +236,8 @@ export function overview(rows, overrides, opts = {}) {
     uncategorizedMerchants: ranked.filter(m => m.category === 'Other').slice(0, 30),
     categories: categoryList(),
     notes: 'Spending excludes card repayments and cashback; merchant refunds count as negative spending. '
-      + 'Income is debit-account deposits from payers you never paid. Amounts are EUR.',
+      + 'Income is debit-account deposits from payers you never paid. '
+      + `Amounts are ${currency}; statements in other currencies were converted at the latest exchange rate.`,
   }
 }
 
@@ -210,6 +264,7 @@ export function transactions(rows, overrides, opts = {}) {
   matched.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
   return {
     type,
+    currency: opts.currency ?? 'EUR',
     matched: matched.length,
     total: round(matched.reduce((a, e) => a + e.value, 0)),
     returned: Math.min(limit, matched.length),
@@ -219,6 +274,7 @@ export function transactions(rows, overrides, opts = {}) {
       category: e.category,
       account: e.account ?? 'credit',
       amount: round(e.value),
+      ...(e.original ? { original: { amount: round(type === 'income' ? e.original.amount : -e.original.amount), currency: e.original.currency } } : {}),
       title: e.title,
     })),
   }

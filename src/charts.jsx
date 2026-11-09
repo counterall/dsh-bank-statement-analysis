@@ -4,10 +4,21 @@ import { catLabel } from './i18n.js'
 
 export const colorOf = category => `var(--sp-s${CATEGORIES.indexOf(category)})`
 
-const eur = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'EUR' })
-const eur0 = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
-export const money = n => eur.format(n)
-export const money0 = n => eur0.format(n)
+const formats = new Map()
+const formatter = (currency, digits) => {
+  const key = `${currency}|${digits}`
+  if (!formats.has(key)) {
+    formats.set(key, new Intl.NumberFormat('zh-CN', { style: 'currency', currency, ...(digits === 0 ? { maximumFractionDigits: 0 } : {}) }))
+  }
+  return formats.get(key)
+}
+
+// The dashboard shows every amount in one display currency (the page sets it
+// before rendering), so charts and tiles can format without passing it around.
+let display = 'EUR'
+export function setMoneyCurrency(currency) { display = currency || 'EUR' }
+export const money = (n, currency = display) => formatter(currency, 2).format(n)
+export const money0 = n => formatter(display, 0).format(n)
 
 const GRANULARITY_UNIT = { week: '周', month: '月', year: '年' }
 

@@ -1,19 +1,24 @@
 # dsh-spending-insights
 
-DeepSeek Harness plugin that adds a **消费分析** (Spending) entry to the left sidebar (the panel list above the Workspace section). It opens a dashboard (Chinese UI) built from a **folder of Nordea bank statements**, analysed together:
+DeepSeek Harness plugin that adds a **消费分析** (Spending) entry to the left sidebar (the panel list above the Workspace section). It opens a dashboard (Chinese UI) built from a **folder of Nordea bank statements and Alipay exports**, analysed together:
 
 | File | Account |
 |---|---|
 | `Nordea Gold - ….csv` (CSV export) | credit card |
 | `…_Nordea Bank Abp_INVOICE.xml` (Finvoice e-invoice, one per billing month) | credit card |
 | `Current Account ….csv` (CSV export) | debit / current account |
+| `Alipay(….csv` (支付宝 交易明细 export, GBK, amounts in RMB) | Alipay (支付宝) |
+
+Alipay rows count 支出 as spending and 收入 as income (or a refund, for 退款 rows and merchants you also paid); closed payments (交易关闭) and 不计收支 transfers are left out. Merchants are categorised by the keyword rules, then Alipay's own 交易分类 (餐饮美食, 交通出行, 酒店旅游, …), then the 商品说明.
+
+**Currency:** the **€ 欧元 / ¥ 人民币** switch at the top right shows every amount (tiles, charts, table, agent tools) in one currency. Statements in the other currency are converted with the latest exchange rate, fetched each time the statements are loaded (opening the panel, **刷新**): ECB reference rates from frankfurter.dev (published each working day), falling back to open.er-api.com. The rate in use is shown under the folder path, and a converted row shows its statement amount under the converted one. Offline, the last fetched rate is used (marked as such). The choice is saved with the folder.
  It also gives the DSH agent tools over the same data, so you can ask about your spending in any chat.
 
 ## Statements folder
 
 Click **选择文件夹…** (native folder chooser) or **输入路径** (type a path, e.g. `~/Google Drive/账单`) and pick the folder holding your statements. A cloud-synced folder (Google Drive, iCloud, Dropbox) makes the same statements available on every machine. Every `*.csv` and `*.xml` in the folder and one level of subfolders (e.g. one per year) is read. Overlapping statements are de-duplicated, including a credit card CSV and XML invoices covering the same weeks: rows match on account, date and amount plus the title, ignoring the differences between the two exports (the CSV's `USD 5,90 ` prefix on foreign purchases, `*` characters, truncated titles, `Payment 05.10` vs `Payment`). Add new statements to the folder and click **刷新**.
 
-The folder path and your category changes are stored in `$DSH_HOME/storages/spending-insights.json` (default `~/.dsh/storages`), shared by all profiles on the machine. Category changes made by v0.1 in the browser are moved there automatically the first time the panel opens.
+The folder path, display currency, last exchange rate and your category changes are stored in `$DSH_HOME/storages/spending-insights.json` (default `~/.dsh/storages`), shared by all profiles on the machine. Category changes made by v0.1 in the browser are moved there automatically the first time the panel opens.
 
 ## Agent tools
 
@@ -21,6 +26,8 @@ The folder path and your category changes are stored in `$DSH_HOME/storages/spen
 |---|---|
 | `spending_overview` | Totals (spending, income, surplus, cashback), per-category split, a week/month/year trend, top merchants and merchants still in 其他, for an optional date range |
 | `spending_transactions` | Individual transactions filtered by date range, category (key or Chinese label), merchant text, spending/income |
+
+Both take an optional `currency` (`EUR` or `CNY`, default: the dashboard's choice) and report the exchange rate used.
 | `spending_set_category` | Recategorise a merchant (or `auto` to undo); the dashboard picks it up on 刷新 / reopen |
 
 Try e.g. “上个月我在餐饮上花了多少？和之前比呢？” or “帮我把「其他」里的商户归类”.
