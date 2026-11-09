@@ -4,7 +4,7 @@
 // edits are stored there too, shared with the agent tools.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CATEGORIES, bucketize, categoryTotals, daysBetween, incomeOf, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
+  CATEGORIES, bucketize, categoryTotals, customBounds, daysBetween, incomeOf, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
 } from './data.js'
 import { bindConnection, call } from './remote.js'
 import { clearLegacy, legacyOverrides } from './storage.js'
@@ -17,7 +17,7 @@ const PANEL_ID = 'spending-insights'
 const STYLE_ID = 'dsh-spending-insights-style'
 const PAGE_SIZES = [20, 50, 100]
 
-const RANGES = [['lastmonth', '上个月'], ['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部']]
+const RANGES = [['lastmonth', '上个月'], ['3m', '近3个月'], ['6m', '近6个月'], ['12m', '近12个月'], ['ytd', '今年'], ['all', '全部'], ['custom', '自定义']]
 const GRANULARITIES = [['week', '周'], ['month', '月'], ['year', '年']]
 const METRICS = [['income', '收入'], ['spend', '支出'], ['surplus', '盈余']]
 const ACCOUNT_LABELS = { credit: '信用卡', debit: '借记卡' }
@@ -33,6 +33,24 @@ function Segmented({ options, value, onChange, label, isDisabled, disabledTitle 
         )
       })}
     </div>
+  )
+}
+
+/**
+ * Pick any period: two date fields (the native calendar pops up on click),
+ * bounded by the statement data. Either end may be left empty (open-ended).
+ */
+function DateRangePicker({ from, to, min, max, onChange }) {
+  return (
+    <span className="dshsp-daterange" role="group" aria-label="自定义时间范围">
+      <input type="date" className="dshsp-input dshsp-date" value={from} min={min} max={to || max}
+        onChange={e => onChange(e.target.value, to)} aria-label="开始日期" />
+      <span className="dshsp-label">至</span>
+      <input type="date" className="dshsp-input dshsp-date" value={to} min={from || min} max={max}
+        onChange={e => onChange(from, e.target.value)} aria-label="结束日期" />
+      <button type="button" className="dshsp-link" onClick={() => onChange(min ?? '', max ?? '')}
+        title="重置为全部账单日期">重置</button>
+    </span>
   )
 }
 
@@ -151,6 +169,8 @@ export function SpendingPage() {
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [range, setRange] = useState('all')
+  /** Custom range bounds (YYYY-MM-DD or ''), used when range is 'custom'. */
+  const [custom, setCustom] = useState({ from: '', to: '' })
   const [granularity, setGranularity] = useState('month')
   const [metric, setMetric] = useState('spend')
   /** Selected categories; `undefined` means all. */
@@ -224,9 +244,9 @@ export function SpendingPage() {
   const allDates = [...all, ...allIncome].map(e => e.date)
   const latest = allDates.length ? allDates.reduce((a, d) => (d > a ? d : a)) : undefined
   const earliest = allDates.length ? allDates.reduce((a, d) => (d < a ? d : a)) : undefined
-  const coversAll = r => r !== 'all' && rangeCoversAll(r, earliest, latest)
-  const from = rangeStart(range, latest)
-  const to = rangeEnd(range, latest)
+  const coversAll = r => r !== 'all' && r !== 'custom' && rangeCoversAll(r, earliest, latest)
+  const bounds = range === 'custom' ? customBounds(custom.from, custom.to) : { from: rangeStart(range, latest), to: rangeEnd(range, latest) }
+  const { from, to } = bounds
   const inRange = d => (!from || d >= from) && (!to || d <= to)
   const inPeriod = useMemo(() => all.filter(e => inRange(e.date)), [all, from, to])
   const incomeInPeriod = useMemo(() => allIncome.filter(e => inRange(e.date)), [allIncome, from, to])
@@ -235,6 +255,8 @@ export function SpendingPage() {
   const periodEnd = to && latest && to < latest ? to : latest
 
   const selectRange = r => {
+    // Entering 自定义 starts from the period currently shown.
+    if (r === 'custom' && range !== 'custom') setCustom({ from: periodStart ?? '', to: periodEnd ?? '' })
     setRange(r)
     if (r === 'lastmonth') setGranularity('week')
   }
@@ -282,7 +304,7 @@ export function SpendingPage() {
   const pages = Math.max(1, Math.ceil(listed.length / pageSize))
   const current = Math.min(page, pages)
   const pageRows = listed.slice((current - 1) * pageSize, current * pageSize)
-  useEffect(() => { setPage(1) }, [range, query, pageSize, active.join('|')])
+  useEffect(() => { setPage(1) }, [from, to, query, pageSize, active.join('|')])
 
   const setOverride = async (merchant, category) => {
     const previous = store.overrides
@@ -359,12 +381,18 @@ export function SpendingPage() {
         {header}
         {noticeEl}
 
+        <AskAiCard filters={{ from: periodStart, to: periodEnd, categories: isAll ? [] : active, granularity }} />
+
         <section className="dshsp-filters" aria-label="筛选">
           <div className="dshsp-filter-row">
             <span className="dshsp-label">时间范围</span>
             <Segmented label="时间范围" options={RANGES} value={range} onChange={selectRange}
               isDisabled={coversAll}
               disabledTitle={`已导入的账单只覆盖 ${earliest} 至 ${latest}，此范围与「全部」相同。导入更早的账单后即可使用。`} />
+            {range === 'custom' && (
+              <DateRangePicker from={custom.from} to={custom.to} min={earliest} max={latest}
+                onChange={(f, t) => setCustom({ from: f, to: t })} />
+            )}
             <span className="dshsp-label dshsp-gap">趋势粒度</span>
             <Segmented label="趋势粒度" options={GRANULARITIES} value={granularity} onChange={setGranularity} />
             {latest && (
@@ -436,8 +464,6 @@ export function SpendingPage() {
             <div className="dshsp-tile-note">{income > 0 ? `储蓄率 ${((surplus / income) * 100).toFixed(0)}%` : `按 ${days} 天折算`}</div>
           </div>
         </div>
-
-        <AskAiCard filters={{ from: periodStart, to: periodEnd, categories: isAll ? [] : active, granularity }} />
 
         {entries.length === 0 && incomeInPeriod.length === 0
           ? <div className="dshsp-notice">该时间范围内没有交易记录。</div>

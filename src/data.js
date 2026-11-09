@@ -404,6 +404,17 @@ export function rangeEnd(range, latestIso) {
   return toIso(new Date(Date.UTC(Number(latestIso.slice(0, 4)), Number(latestIso.slice(5, 7)) - 1, 0)))
 }
 
+/**
+ * Bounds of a user-picked period. Empty or invalid ends are open (undefined);
+ * reversed ends are swapped.
+ */
+export function customBounds(fromIso, toIso) {
+  const valid = d => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : undefined)
+  const from = valid(fromIso)
+  const to = valid(toIso)
+  return from && to && from > to ? { from: to, to: from } : { from, to }
+}
+
 /** True when a range preset includes every entry (it would show the same as "all"). */
 export function rangeCoversAll(range, earliestIso, latestIso) {
   if (!earliestIso || !latestIso) return true
