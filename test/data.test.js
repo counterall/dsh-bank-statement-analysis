@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   bucketize, bucketLabel, categorize, categoryTotals, merchantOf, mergeRows,
-  accountOf, incomeOf, parseAmount, parseDate, parseFinvoice, parseStatement, parseStatementFile, rangeCoversAll, rangeEnd, rangeStart, spendingOf, titleKey,
+  accountOf, incomeOf, parseAmount, parseDate, parseFinvoice, parseStatement, parseStatementFile, customBounds, rangeCoversAll, rangeEnd, rangeStart, spendingOf, titleKey,
 } from '../src/data.js'
 
 const HEADER_CSV = 'Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
@@ -201,4 +201,21 @@ test('the same card transaction in a CSV and an XML invoice is merged', () => {
   assert.equal(titleKey('USD 5,90 Retail USA SEATTLE AMAZON DIGI* 5'), 'retailusaseattleamazondigi5')
   // A debit row with the same date, amount and title is a different transaction.
   assert.equal(mergeRows(xml, [{ ...xml[1], account: 'debit' }]).added, 1)
+})
+
+test('问 AI prompt carries the question and the current filters', async () => {
+  const { buildPrompt, PRESETS } = await import('../src/prompt.js')
+  const p = buildPrompt('  上个月餐饮多吗？ ', { from: '2026-10-01', to: '2026-10-31', categories: ['Restaurants & cafés', 'Groceries'], granularity: 'week' })
+  assert.match(p, /^上个月餐饮多吗？\n（来自/)
+  assert.match(p, /2026-10-01 至 2026-10-31，餐饮外卖、日用杂货，趋势按周/)
+  assert.match(p, /spending_overview/)
+  assert.match(buildPrompt('x', { from: 'a', to: 'b', categories: [], granularity: 'month' }), /全部分类，趋势按月/)
+  assert.ok(PRESETS.find(([l]) => l === '归类「其他」')[1].includes('等我确认'))
+})
+
+test('custom range: open ends, invalid ends ignored, reversed ends swapped', () => {
+  assert.deepEqual(customBounds('2026-03-01', '2026-05-31'), { from: '2026-03-01', to: '2026-05-31' })
+  assert.deepEqual(customBounds('', '2026-05-31'), { from: undefined, to: '2026-05-31' })
+  assert.deepEqual(customBounds('2026-06-01', '2026-01-01'), { from: '2026-01-01', to: '2026-06-01' })
+  assert.deepEqual(customBounds('garbage', undefined), { from: undefined, to: undefined })
 })
