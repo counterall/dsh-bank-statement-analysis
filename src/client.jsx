@@ -1,10 +1,13 @@
 // Browser half: a "消费分析" row in the left sidebar's panel list (above the
 // Workspace section) that opens a full spending dashboard in the main column.
+// Statements are read by the host half from a folder the user picks; category
+// edits are stored there too, shared with the agent tools.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CATEGORIES, bucketize, categoryTotals, daysBetween, mergeRows, parseStatement, incomeOf, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
+  CATEGORIES, bucketize, categoryTotals, daysBetween, incomeOf, rangeCoversAll, rangeEnd, rangeStart, spendingOf,
 } from './data.js'
-import { load, save } from './storage.js'
+import { bindConnection, call } from './remote.js'
+import { clearLegacy, legacyOverrides } from './storage.js'
 import { CSS } from './styles.js'
 import { CategoryDonut, Swatch, TrendChart, money } from './charts.jsx'
 import { catLabel } from './i18n.js'
@@ -42,18 +45,58 @@ export function SpendingIcon({ size = 20 }) {
   )
 }
 
-function readFile(file) {
-  if (typeof file.text === 'function') return file.text()
-  return new Promise((resolve, reject) => {
-    const r = new FileReader()
-    r.onload = () => resolve(String(r.result))
-    r.onerror = () => reject(r.error)
-    r.readAsText(file)
-  })
+const EMPTY = { folder: null, overrides: {}, rows: [], files: [] }
+const errorText = e => (e instanceof Error ? e.message : String(e))
+
+function readSummary(data) {
+  const ok = data.files.filter(f => !f.error)
+  const bad = data.files.filter(f => f.error)
+  const skipped = ok.reduce((a, f) => a + f.skipped, 0)
+  let text = `已读取 ${ok.length} 个账单文件，共 ${data.rows.length} 条记录`
+  if (skipped) text += `（跳过 ${skipped} 行无法识别的内容）`
+  text += '。'
+  if (bad.length) text += ` 无法读取：${bad.map(f => `${f.name}（${f.error}）`).join('；')}`
+  return { error: bad.length > 0, text }
+}
+
+/** Folder bar: picker, manual path entry (for hosts without a native chooser) and refresh. */
+function FolderControls({ folder, busy, onPick, onSetPath, onRefresh }) {
+  const [editing, setEditing] = useState(false)
+  const [path, setPath] = useState('')
+  const submit = async e => {
+    e.preventDefault()
+    if (await onSetPath(path)) setEditing(false)
+  }
+  if (editing) {
+    return (
+      <form className="dshsp-actions" onSubmit={submit}>
+        <input className="dshsp-input dshsp-path" autoFocus value={path} placeholder="/Users/…/账单 或 ~/Documents/账单"
+          aria-label="账单文件夹路径" onChange={e => setPath(e.target.value)} />
+        <button type="submit" className="dshsp-btn dshsp-btn-primary" disabled={busy}>保存</button>
+        <button type="button" className="dshsp-btn" onClick={() => setEditing(false)}>取消</button>
+      </form>
+    )
+  }
+  return (
+    <div className="dshsp-actions">
+      <button type="button" className="dshsp-link" onClick={() => { setPath(folder ?? ''); setEditing(true) }}>输入路径</button>
+      <button type="button" className={`dshsp-btn${folder ? '' : ' dshsp-btn-primary'}`} disabled={busy}
+        onClick={async () => { if ((await onPick()) === 'unsupported') { setPath(folder ?? ''); setEditing(true) } }}>
+        {folder ? '更换文件夹…' : '选择文件夹…'}
+      </button>
+      {folder && (
+        <button type="button" className="dshsp-btn dshsp-btn-primary" disabled={busy} onClick={onRefresh}>
+          {busy ? '读取中…' : '刷新'}
+        </button>
+      )}
+    </div>
+  )
 }
 
 export function SpendingPage() {
-  const [store, setStore] = useState(load)
+  const [store, setStore] = useState(EMPTY)
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [range, setRange] = useState('all')
   const [granularity, setGranularity] = useState('month')
   const [metric, setMetric] = useState('spend')
@@ -63,58 +106,61 @@ export function SpendingPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [notice, setNotice] = useState(undefined)
-  const [confirmClear, setConfirmClear] = useState(false)
-  const [dragging, setDragging] = useState(false)
-  const fileInput = useRef(null)
-  // Latest store for async imports, so overlapping imports never merge into a stale snapshot.
-  const storeRef = useRef(store)
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
 
-  const update = useCallback(next => {
-    storeRef.current = next
-    setStore(next)
-    if (!save(next)) setNotice({ error: true, text: '无法写入本地存储，刷新后数据将丢失。' })
+  /** Re-read the folder on the host; `announce` shows what was read. */
+  const refresh = useCallback(async announce => {
+    setBusy(true)
+    try {
+      const data = await call('state')
+      if (!mounted.current) return
+      setStore(data)
+      if (data.error) setNotice({ error: true, text: `无法读取账单文件夹：${data.error}` })
+      else if (announce && data.folder) setNotice(readSummary(data))
+    } catch (e) {
+      if (mounted.current) setNotice({ error: true, text: `读取失败：${errorText(e)}` })
+    } finally {
+      if (mounted.current) { setBusy(false); setLoaded(true) }
+    }
   }, [])
 
-  const importFiles = useCallback(async files => {
-    const parsedFiles = []
-    try {
-      for (const file of files) parsedFiles.push([file.name, parseStatement(await readFile(file), file.name)])
-    } catch (e) {
-      setNotice({ error: true, text: `导入失败：${e instanceof Error ? e.message : String(e)}` })
-      return
-    }
-    const base = storeRef.current
-    let rows = base.rows
-    const names = []
-    const labelled = []
-    let added = 0
-    let skipped = 0
-    for (const [name, parsed] of parsedFiles) {
-      const m = mergeRows(rows, parsed.rows)
-      rows = m.merged
-      added += m.added
-      skipped += parsed.skipped
-      names.push(name)
-      labelled.push(`${name}（${ACCOUNT_LABELS[parsed.account]}）`)
-    }
-    update({ ...base, rows, files: [...new Set([...base.files, ...names])] })
-    setNotice({ text: `已从 ${labelled.join('、')} 导入 ${added} 笔新交易` + (skipped ? `（跳过 ${skipped} 行无法识别的内容）` : '') + '。' })
-  }, [update])
+  // First open: hand v0.1's category edits to the host, then load.
+  useEffect(() => {
+    (async () => {
+      const legacy = legacyOverrides()
+      if (legacy) {
+        try { await call('importOverrides', { overrides: legacy }); clearLegacy() } catch { /* retried next open */ }
+      }
+      await refresh(false)
+    })()
+  }, [refresh])
 
-  const onPick = e => {
-    const files = [...(e.target.files ?? [])]
-    e.target.value = ''
-    if (files.length) importFiles(files)
+  const pickFolder = async () => {
+    setBusy(true)
+    try {
+      const r = await call('pickFolder')
+      if (!r.supported) return 'unsupported'
+      if (r.folder) await refresh(true)
+      return r.folder ? 'picked' : 'cancelled'
+    } catch (e) {
+      setNotice({ error: true, text: `无法打开文件夹选择器：${errorText(e)}` })
+      return 'unsupported'
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
   }
-  const dropHandlers = {
-    onDragOver: e => { e.preventDefault(); setDragging(true) },
-    onDragLeave: e => { if (e.currentTarget === e.target) setDragging(false) },
-    onDrop: e => {
-      e.preventDefault()
-      setDragging(false)
-      const files = [...(e.dataTransfer?.files ?? [])].filter(f => /\.(csv|txt)$/i.test(f.name))
-      if (files.length) importFiles(files)
-    },
+
+  const setFolderPath = async path => {
+    try {
+      const r = await call('setFolder', { folder: path })
+      if (!r.ok) { setNotice({ error: true, text: r.error }); return false }
+      await refresh(true)
+      return true
+    } catch (e) {
+      setNotice({ error: true, text: errorText(e) })
+      return false
+    }
   }
 
   // Period filter first (gives the per-category amounts shown in the filter bar),
@@ -185,8 +231,17 @@ export function SpendingPage() {
   const pageRows = listed.slice((current - 1) * pageSize, current * pageSize)
   useEffect(() => { setPage(1) }, [range, query, pageSize, active.join('|')])
 
-  const setOverride = (merchant, category) => {
-    update({ ...store, overrides: { ...store.overrides, [merchant]: category } })
+  const setOverride = async (merchant, category) => {
+    const previous = store.overrides
+    setStore(s => ({ ...s, overrides: { ...s.overrides, [merchant]: category } })) // optimistic
+    try {
+      const r = await call('setOverride', { merchant, category })
+      if (!r.ok) throw new Error(r.error)
+      setStore(s => ({ ...s, overrides: r.overrides }))
+    } catch (e) {
+      setStore(s => ({ ...s, overrides: previous }))
+      setNotice({ error: true, text: `分类保存失败：${errorText(e)}` })
+    }
   }
 
   const header = (
@@ -194,27 +249,14 @@ export function SpendingPage() {
       <div>
         <h1 className="dshsp-title">消费分析</h1>
         <div className="dshsp-sub">
-          {store.rows.length
-            ? `共 ${store.rows.length} 条账单记录 · 已导入 ${store.files.length} 个文件 · 数据仅保存在本机`
+          {store.folder
+            ? <>账单文件夹 <code className="dshsp-folder" title={store.folder}>{store.folder}</code>
+              {` · ${store.files.length} 个文件 · ${store.rows.length} 条记录`}</>
             : '根据银行账单 CSV 生成消费图表，数据仅保存在本机。'}
         </div>
       </div>
-      <div className="dshsp-actions">
-        <input ref={fileInput} type="file" accept=".csv,text/csv,text/plain" multiple hidden onChange={onPick} />
-        {store.rows.length > 0 && (confirmClear
-          ? (
-            <>
-              <span className="dshsp-label">确定删除所有已导入的数据？</span>
-              <button type="button" className="dshsp-btn dshsp-btn-danger"
-                onClick={() => { update({ rows: [], overrides: {}, files: [] }); setConfirmClear(false); setNotice(undefined); setSelected(undefined) }}>
-                删除
-              </button>
-              <button type="button" className="dshsp-btn" onClick={() => setConfirmClear(false)}>取消</button>
-            </>
-          )
-          : <button type="button" className="dshsp-btn" onClick={() => setConfirmClear(true)}>清除数据</button>)}
-        <button type="button" className="dshsp-btn dshsp-btn-primary" onClick={() => fileInput.current?.click()}>导入 CSV…</button>
-      </div>
+      <FolderControls folder={store.folder} busy={busy} onPick={pickFolder} onSetPath={setFolderPath}
+        onRefresh={() => refresh(true)} />
     </div>
   )
 
@@ -232,20 +274,34 @@ export function SpendingPage() {
         <div className="dshsp-inner">
           {header}
           {noticeEl}
-          <div className={`dshsp-empty${dragging ? ' dshsp-drag' : ''}`} {...dropHandlers}>
-            <SpendingIcon size={40} />
-            <h2>导入银行账单</h2>
-            <p>将 CSV 账单文件拖放到这里，或点击<strong>导入 CSV…</strong>。支持 Nordea 信用卡账单（如 Nordea Gold…csv）
-              和借记卡账单（Current Account…csv），按文件名区分。<br />
-              可以导入多份账单，重复的记录会自动合并；借记卡中给信用卡的还款（Nordea Bank Abp）不会重复计入支出。</p>
-          </div>
+          {loaded && (
+            <div className="dshsp-empty">
+              <SpendingIcon size={40} />
+              {store.folder && !store.error
+                ? (
+                  <>
+                    <h2>文件夹中没有可识别的账单</h2>
+                    <p>把银行账单 CSV 放进 <code>{store.folder}</code>（可以放在一层子文件夹里，例如按年份），然后点击<strong>刷新</strong>。</p>
+                  </>
+                )
+                : (
+                  <>
+                    <h2>选择账单文件夹</h2>
+                    <p>点击<strong>选择文件夹…</strong>，选择存放银行账单 CSV 的文件夹，例如 Google Drive 或 iCloud 同步的文件夹，
+                      这样在每台电脑上都能用同一份账单。以后有新账单时，放进这个文件夹再点<strong>刷新</strong>即可。<br />
+                      支持 Nordea 信用卡账单（如 Nordea Gold…csv）和借记卡账单（Current Account…csv），按文件名区分；
+                      重叠的账单会自动去重，借记卡中给信用卡的还款不会重复计入支出。</p>
+                  </>
+                )}
+            </div>
+          )}
         </div>
       </div>
     )
   }
 
   return (
-    <div className={`dshsp-root${dragging ? ' dshsp-drag' : ''}`} {...dropHandlers}>
+    <div className="dshsp-root">
       <div className="dshsp-inner">
         {header}
         {noticeEl}
@@ -391,7 +447,7 @@ export function SpendingPage() {
             </table>
           </div>
           <div className="dshsp-pager">
-            <span className="dshsp-more">修改分类会应用到该商户的所有交易。</span>
+            <span className="dshsp-more">修改分类会应用到该商户的所有交易。也可以在对话中让 AI 帮你分析或归类消费。</span>
             <div className="dshsp-pager-controls">
               <label className="dshsp-label">
                 每页
@@ -417,6 +473,8 @@ export const name = 'dsh-spending-insights'
 export const inject = ['slots']
 
 export function apply(ctx) {
+  bindConnection(ctx)
+
   ctx.effect(() => {
     if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return () => {}
     const el = document.createElement('style')

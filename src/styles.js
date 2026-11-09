@@ -44,7 +44,13 @@ body[data-ds-dark-theme] .dshsp-root {
 @media (hover: hover) { .dshsp-btn:hover { background: var(--sp-hover); } }
 .dshsp-btn-primary { background: var(--sp-text); color: var(--sp-surface); border-color: transparent; }
 @media (hover: hover) { .dshsp-btn-primary:hover { background: var(--sp-text); opacity: .88; } }
-.dshsp-btn-danger { color: #d03b3b; }
+.dshsp-link { appearance: none; border: 0; background: none; padding: 0 4px; font: inherit; color: var(--sp-text-2);
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.dshsp-link:focus-visible { outline: 2px solid var(--sp-accent); outline-offset: 1px; border-radius: 4px; }
+.dshsp-input.dshsp-path { width: 340px; }
+.dshsp-folder { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--sp-hover); border-radius: 4px;
+  padding: 1px 5px; display: inline-block; max-width: min(520px, 60vw); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: bottom; }
 .dshsp-filters { position: sticky; top: 0; z-index: 3; background: var(--sp-surface); padding: 10px 0; margin: -10px 0 6px;
   border-bottom: 0.5px solid var(--sp-border); display: grid; gap: 8px; }
 .dshsp-filter-row { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
@@ -125,7 +131,8 @@ body[data-ds-dark-theme] .dshsp-root {
 .dshsp-deficit { color: var(--sp-deficit); }
 .dshsp-account { color: var(--sp-text-2); white-space: nowrap; }
 .dshsp-empty { border: 1px dashed var(--sp-border); border-radius: 16px; padding: 48px 24px; text-align: center; color: var(--sp-text-2); }
-.dshsp-empty.dshsp-drag, .dshsp-root.dshsp-drag .dshsp-inner { outline: 2px dashed var(--sp-accent); outline-offset: -6px; border-radius: 16px; }
+.dshsp-empty p { max-width: 640px; margin: 0 auto; line-height: 1.6; }
+.dshsp-empty code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--sp-hover); border-radius: 4px; padding: 1px 5px; word-break: break-all; }
 .dshsp-empty h2 { color: var(--sp-text); font-size: 16px; margin: 12px 0 4px; }
 .dshsp-notice { margin-bottom: 12px; padding: 8px 12px; border-radius: 8px; background: var(--sp-hover); color: var(--sp-text-2); }
 .dshsp-notice.dshsp-error { color: #d03b3b; }
