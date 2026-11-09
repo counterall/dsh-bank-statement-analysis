@@ -24,14 +24,14 @@ export const CATEGORIES = [
 const RULES = [
   ['Insurance', /vakuutus|insurance|\bif p&c\b|^if\b|lähitapiola|fennia|pohjola vakuutus|turva\b/i],
   ['Medical', /apteekki|pharmacy|terveys|mehiläinen|terveystalo|pihlajalinna|aava|lääkäri|hammas|dental|klinikka|clinic|hospital|sairaala|\bhus\b|laboratori|synlab|optikko|instrumentarium|specsavers/i],
-  ['Groceries', /prisma|lidl|k-?citymarket|k-?supermarket|k-?market|s-?market|alepa|asian market|gc market|supermarket|sun market|dajiangyou|tokyokan|hakaniemen|food ?market|ruoka|\balko\b/i],
-  ['Restaurants & cafés', /wolt|foodora|espresso house|starbucks|robert'?s coffee|cafe|café|coffee|kahvila|ravintola|restaurant|mcdonald|\bmcd|\bkfc\b|burger|hesburger|pizza|sushi|kebab|bar /i],
+  ['Groceries', /prisma|lidl|k-?citymarket|k-?supermarket|k-?market|s-?market|alepa|asian market|gc market|supermarket|sun market|dajiangyou|tokyokan|hakaniemen|food ?market|ruoka|\balko\b|big c\b|7-eleven/i],
+  ['Restaurants & cafés', /wolt|foodora|espresso house|starbucks|robert'?s coffee|cafe|café|coffee|kahvila|ravintola|restaurant|mcdonald|\bmcd|\bkfc\b|burger|hesburger|pizza|sushi|kebab|bar |noodle|kitchen|sikdang|depachika|food world/i],
   ['Travel', /hotel|hostel|motel|booking\.com|airbnb|expedia|agoda|trivago|scandic|radisson|hilton|marriott|finnair|ryanair|norwegian|lufthansa|airbaltic|\bklm\b|\bsas |tallink|silja|viking line|eckerö|finnlines|himos|\blevi\b|\bruka\b|matkahuolto|onnibus|flixbus|travel|matka/i],
   ['Entertainment', /finnkino|megastar|bowling|keilailu|ooppera|kansallisooppe|teatteri|theatre|theater|cinema|elokuva|konsertti|concert|lippupiste|lippu\.fi|tiketti|ticketmaster|liveniation|steam|playstation|nintendo|epic games|linnanmäki|serena|museo|museum|escape|karaoke|tivoli|sea life|hc helsinki|jokerit/i],
-  ['Transport & car', /bilia|traficom|liikenne ja viestint|moovy|aimo|europark|easypark|parking|pysäk|neste|st1|teboil|abc |shell|virta|ev ?charg|recharge|epass24|hsl|vr-|vr |taxi|uber|bolt/i],
+  ['Transport & car', /bilia|traficom|liikenne ja viestint|moovy|aimo|europark|easypark|parking|pysäk|neste|st1|teboil|abc |shell|virta|ev ?charg|recharge|epass24|hsl|vr-|vr |taxi|uber|bolt|\bgrab\b|^transport$|\bbts\b|\bmrt\b/i],
   ['Subscriptions', /youtube|google|openai|chatgpt|anthropic|claude\.ai|apple\.com|itunes|icloud|amazon digi|prime video|netflix|spotify|disney|hbo|telia|elisa|dna oy|microsoft|github/i],
-  ['Health & fitness', /sats|elixia|epassi|smartum|uifin|gym|fitness|kuntosali|urheilu/i],
-  ['Shopping', /k-?rauta|partioaitta|kirjakaup|akateeminen|marimekko|muji|biltema|ikea|clas ohlson|tokmanni|gigantti|verkkokauppa|power |h&m|zara|zalando|amazon|stockmann|sokos|motonet|xxl|intersport|halpa-halli/i],
+  ['Health & fitness', /sats|elixia|epassi|smartum|uifin|gym|fitness|kuntosali|urheilu|massage|let'?s relax|\bspa\b/i],
+  ['Shopping', /k-?rauta|partioaitta|kirjakaup|akateeminen|marimekko|muji|biltema|ikea|clas ohlson|tokmanni|gigantti|verkkokauppa|power |h&m|zara|zalando|amazon|stockmann|sokos|motonet|xxl|intersport|halpa-halli|uniqlo|pop mart|beams|united arrows|gentlewoman/i],
   ['Pets', /musti|mirri|pet ?shop|eläin/i],
   ['Housing & utilities', /\bas oy\b|housing|asunto|vuokra|isännöinti|helen|caruna|fortum|oomi|vattenfall|vesihuolto|sähkö/i],
 ]
@@ -40,6 +40,18 @@ const RULES = [
 export function categorize(merchant) {
   for (const [category, re] of RULES) if (re.test(merchant)) return category
   return 'Other'
+}
+
+/**
+ * Rule-based category of a row: the merchant name first, then the category the
+ * statement itself suggests (`hint`, e.g. Alipay's 交易分类), then the item
+ * description (`note`, e.g. Alipay's 商品说明 "Transport").
+ */
+export function categoryOf(row) {
+  const byMerchant = categorize(row.merchant)
+  if (byMerchant !== 'Other') return byMerchant
+  if (row.hint && CATEGORIES.includes(row.hint)) return row.hint
+  return row.note ? categorize(row.note) : 'Other'
 }
 
 /** Split one `;`-separated line, honouring double quotes. */
@@ -211,10 +223,114 @@ export function parseFinvoice(xml) {
   return { account, rows, skipped }
 }
 
-/** Parse any supported statement file: CSV (credit card or current account) or Finvoice XML (credit card). */
+// Alipay's 交易分类 → our categories (others, e.g. 其他 or 商业服务, give no hint).
+const ALIPAY_CATEGORIES = {
+  餐饮美食: 'Restaurants & cafés',
+  交通出行: 'Transport & car',
+  爱车养车: 'Transport & car',
+  酒店旅游: 'Travel',
+  日用百货: 'Groceries',
+  服饰装扮: 'Shopping',
+  数码电器: 'Shopping',
+  家居家装: 'Shopping',
+  母婴亲子: 'Shopping',
+  医疗健康: 'Medical',
+  运动户外: 'Health & fitness',
+  文化休闲: 'Entertainment',
+  住房物业: 'Housing & utilities',
+  充值缴费: 'Housing & utilities',
+  保险: 'Insurance',
+  宠物: 'Pets',
+}
+
+const ALIPAY_HEADER = /^交易时间,/m
+
+/** Looks like an Alipay (支付宝) transaction export. */
+export function isAlipay(text, fileName = '') {
+  return ALIPAY_HEADER.test(text) && (/alipay|支付宝/i.test(fileName) || /支付宝/.test(text))
+}
+
+/**
+ * Parse an Alipay (支付宝) transaction export ("Alipay(20260501-20260602).csv",
+ * already decoded from GBK). A preamble precedes the header row "交易时间,…".
+ * Amounts are RMB and unsigned; 收/支 gives the direction. Closed or failed
+ * payments (交易关闭, typically cancelled or fully refunded) and transfers that
+ * are neither income nor spending (不计收支) are left out.
+ * @returns {{ account: 'alipay', rows: Array, skipped: number }}
+ */
+export function parseAlipay(text) {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  const start = lines.findIndex(l => l.startsWith('交易时间,'))
+  if (start < 0) throw new Error('Not an Alipay transaction export.')
+  const header = splitLine(lines[start], ',')
+  const at = name => header.indexOf(name)
+  const col = {
+    time: at('交易时间'), type: at('交易分类'), payee: at('交易对方'), note: at('商品说明'),
+    direction: at('收/支'), amount: at('金额'), status: at('交易状态'),
+  }
+  if ([col.time, col.payee, col.direction, col.amount].some(i => i < 0)) {
+    throw new Error('Could not find the 交易时间, 交易对方, 收/支 and 金额 columns in this Alipay export.')
+  }
+  const account = 'alipay'
+  const rows = []
+  let skipped = 0
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim() || /^-{5,}/.test(line)) continue
+    const f = splitLine(line, ',')
+    const date = parseDate((f[col.time] ?? '').slice(0, 10))
+    const value = parseAmount(f[col.amount] ?? '')
+    const merchant = (f[col.payee] ?? '').replace(/\s+/g, ' ').trim()
+    if (!date || value === undefined || !merchant) { skipped++; continue }
+    const direction = f[col.direction]
+    const status = f[col.status] ?? ''
+    if (direction !== '支出' && direction !== '收入') continue // 不计收支
+    if (direction === '支出' && /关闭|失败/.test(status)) continue
+    const note = (f[col.note] ?? '').trim()
+    const amount = direction === '支出' ? -value : value
+    const refund = direction === '收入' && (/退款/.test(status) || /^退款/.test(note))
+    rows.push({
+      date,
+      title: note && note !== merchant ? `${merchant} · ${note}` : merchant,
+      merchant,
+      amount,
+      currency: 'CNY',
+      kind: amount < 0 ? 'purchase' : refund ? 'refund' : 'deposit',
+      account,
+      ...(note ? { note } : {}),
+      ...(ALIPAY_CATEGORIES[f[col.type]] ? { hint: ALIPAY_CATEGORIES[f[col.type]] } : {}),
+    })
+  }
+  return { account, rows, skipped }
+}
+
+/** Parse any supported statement file: Nordea CSV (credit card or current account), Finvoice XML (credit card) or Alipay CSV. */
 export function parseStatementFile(text, fileName = '') {
   if (/\.xml$/i.test(fileName) || /^\s*<\?xml/.test(text)) return parseFinvoice(text)
+  if (isAlipay(text, fileName)) return parseAlipay(text)
   return parseStatement(text, fileName)
+}
+
+/** Currencies the dashboard can show amounts in. */
+export const DISPLAY_CURRENCIES = ['EUR', 'CNY']
+
+/**
+ * Rows with every amount in `target`. `rates` gives units per 1 EUR
+ * (`{ EUR: 1, CNY: 7.45 }`). A converted row keeps its statement amount in
+ * `original`. Rows whose currency has no rate are returned in `missing`.
+ * @returns {{ rows: Array, missing: string[] }}
+ */
+export function convertRows(rows, target, rates) {
+  const missing = new Set()
+  const out = []
+  for (const r of rows) {
+    const from = r.currency || 'EUR'
+    if (from === target) { out.push(r); continue }
+    const a = rates?.[from]
+    const b = rates?.[target]
+    if (!a || !b) { missing.add(from); continue }
+    out.push({ ...r, amount: (r.amount / a) * b, currency: target, original: { amount: r.amount, currency: from } })
+  }
+  return { rows: out, missing: [...missing] }
 }
 
 // Rows stored before debit support carry no account: they are credit card rows.
@@ -287,7 +403,7 @@ export function spendingOf(rows, overrides) {
     out.push({
       ...r,
       spend: -r.amount,
-      category: overrides[r.merchant] ?? categorize(r.merchant),
+      category: overrides[r.merchant] ?? categoryOf(r),
     })
   }
   return out

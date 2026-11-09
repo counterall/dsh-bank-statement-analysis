@@ -10,11 +10,11 @@
 // `@Remote` from dsh-typert-protocol produce, served through the API Gateway's
 // source (SRC) dispatch — parameter names are read from the method source, so
 // keep them plain identifiers and do not minify this bundle.
-import { CATEGORIES } from '../data.js'
+import { CATEGORIES, DISPLAY_CURRENCIES, convertRows } from '../data.js'
 import { CATEGORY_LABELS } from '../i18n.js'
 import {
-  categoryList, loadSettings, merchantNames, overview, readFolder, resolveCategory, sanitizeOverrides, saveSettings,
-  storePath, transactions,
+  categoryList, fetchRates, loadSettings, merchantNames, overview, readFolder, resolveCategory, sanitizeOverrides,
+  saveSettings, storePath, transactions,
 } from './core.js'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
@@ -45,6 +45,8 @@ export function chooseFolderMac(signal, run = execFile) {
   })
 }
 
+const RATES_TTL = 10 * 60 * 1000 // agent tool calls reuse a rate fetched within 10 minutes
+
 const expandHome = p => (p === '~' ? homedir() : p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : p)
 
 class SpendingInsights {
@@ -53,6 +55,8 @@ class SpendingInsights {
     this.file = file
     this.picker = undefined
     this.tail = Promise.resolve() // serialises settings writes (widget and agent may race)
+    this.rates = undefined // last fetched exchange rates
+    this.fetchRates = fetchRates
     this.typertRemote = Object.freeze({ service: this, serviceKey: SERVICE, namespace: SERVICE })
   }
 
@@ -70,22 +74,66 @@ class SpendingInsights {
     return run
   }
 
-  /** Statements and settings; `error` explains an unreadable folder. */
-  async load() {
-    const { folder, overrides } = await this.settings()
-    if (!folder) return { folder: null, overrides, rows: [], files: [], readAt: Date.now() }
+  /**
+   * Exchange rates covering `currencies`: fetched now when `fresh` (or none is
+   * cached), else the last fetch; if fetching fails, the last rates saved in
+   * settings (`stale: true`). Undefined when there are none at all.
+   */
+  async ratesFor(currencies, fresh, saved) {
+    const covers = r => r && currencies.every(c => r.rates[c])
+    if (!fresh && covers(this.rates) && Date.now() - this.rates.fetchedAt < RATES_TTL) return this.rates
     try {
-      const { rows, files } = await readFolder(folder)
-      return { folder, overrides, rows, files, readAt: Date.now() }
+      const r = await this.fetchRates(currencies)
+      this.rates = r
+      await this.mutate(s => ({ ...s, lastRates: r })).catch(() => {})
+      return r
     } catch (e) {
-      return { folder, overrides, rows: [], files: [], readAt: Date.now(), error: e instanceof Error ? e.message : String(e) }
+      const fallback = covers(this.rates) ? this.rates : covers(saved) ? saved : undefined
+      return fallback ? { ...fallback, stale: true, error: e instanceof Error ? e.message : String(e) } : undefined
+    }
+  }
+
+  /**
+   * Statements and settings, every amount in the display currency (`currency`).
+   * `rate` describes the exchange rates used; `unconverted` lists currencies
+   * left out for lack of a rate; `error` explains an unreadable folder.
+   */
+  async load({ fresh = false, currency: wanted } = {}) {
+    const { folder, overrides, currency: setting, lastRates } = await this.settings()
+    const currency = DISPLAY_CURRENCIES.includes(wanted) ? wanted : setting
+    const base = { folder, overrides, currency, readAt: Date.now() }
+    if (!folder) return { ...base, rows: [], files: [] }
+    let read
+    try {
+      read = await readFolder(folder)
+    } catch (e) {
+      return { ...base, rows: [], files: [], error: e instanceof Error ? e.message : String(e) }
+    }
+    const currencies = [...new Set(read.rows.map(r => r.currency || 'EUR'))]
+    if (currencies.every(c => c === currency)) return { ...base, rows: read.rows, files: read.files }
+    const rate = await this.ratesFor([...new Set([...currencies, currency])], fresh, lastRates)
+    const { rows, missing } = convertRows(read.rows, currency, rate?.rates)
+    return {
+      ...base,
+      rows,
+      files: read.files,
+      ...(rate ? { rate: { rates: rate.rates, date: rate.date, source: rate.source, fetchedAt: rate.fetchedAt, stale: Boolean(rate.stale) } } : {}),
+      ...(missing.length ? { unconverted: missing } : {}),
     }
   }
 
   // ---- Remote methods (widget) --------------------------------------------
 
+  /** Re-read the folder; the widget's open and 刷新 also fetch the latest exchange rate. */
   async state() {
-    return this.load()
+    return this.load({ fresh: true })
+  }
+
+  /** Show every amount in `currency` (EUR or CNY); returns the state in it. */
+  async setCurrency(currency) {
+    if (!DISPLAY_CURRENCIES.includes(currency)) return { ok: false, error: `unsupported currency ${currency}` }
+    await this.mutate(s => ({ ...s, currency }))
+    return { ok: true, state: await this.load() }
   }
 
   /**
@@ -140,7 +188,7 @@ Object.defineProperty(SpendingInsights.prototype, REMOTE_METHODS, {
   configurable: true,
   value: Object.freeze({
     version: 1,
-    methods: Object.freeze(['state', 'pickFolder', 'setFolder', 'setOverride', 'importOverrides']
+    methods: Object.freeze(['state', 'setCurrency', 'pickFolder', 'setFolder', 'setOverride', 'importOverrides']
       .map(method => Object.freeze({ method, invocation: Object.freeze({ kind: 'direct' }) }))),
   }),
 })
@@ -148,6 +196,12 @@ Object.defineProperty(SpendingInsights.prototype, REMOTE_METHODS, {
 // ---- agent tools -----------------------------------------------------------
 
 const DATE = { type: 'string' }
+const CURRENCY = {
+  type: 'string',
+  enum: DISPLAY_CURRENCIES,
+  description: 'Currency to report amounts in: EUR or CNY (RMB). Default: the currency the user chose in 消费分析. '
+    + 'Statements in other currencies are converted at the latest exchange rate.',
+}
 const CATEGORY_HELP = CATEGORIES.map(c => `${c} (${CATEGORY_LABELS[c]})`).join(', ')
 const json = value => [{ type: 'text', text: JSON.stringify(value) }]
 
@@ -158,11 +212,12 @@ function tool(def) {
   }
 }
 
-async function dataOrHint(service) {
-  const data = await service.load()
+async function dataOrHint(service, currency) {
+  const data = await service.load({ currency })
   if (!data.folder) return { hint: 'No statements folder is set. Ask the user to open 消费分析 in the sidebar and choose the folder that holds their bank statement files (Nordea CSV exports or Finvoice XML invoices).' }
   if (data.error) return { hint: `The statements folder could not be read: ${data.error}` }
   if (data.rows.length === 0) return { hint: `The statements folder (${data.folder}) contains no readable statements (CSV or XML).` }
+  if (data.unconverted) data.warning = `No exchange rate was available, so transactions in ${data.unconverted.join(', ')} are left out.`
   return { data }
 }
 
@@ -173,27 +228,36 @@ function tools(service) {
       description: 'Summarise the user\'s personal spending and income from their bank statements (the 消费分析 / Spending Insights plugin): '
         + 'totals, spending per category with shares, a spending/income trend per week, month or year, top merchants and '
         + 'merchants still in the "Other" category. Use it for questions about how much they spend, where their money goes, '
-        + 'or how spending changes over time. Dates are YYYY-MM-DD; omit them for all data. Amounts are EUR.',
+        + 'or how spending changes over time. Dates are YYYY-MM-DD; omit them for all data. Statements are Nordea (EUR) and '
+      + 'Alipay/支付宝 (RMB); amounts are reported in one currency (see `currency`).',
       parameters: {
         type: 'object',
         properties: {
           from: { ...DATE, description: 'First day to include (inclusive).' },
           to: { ...DATE, description: 'Last day to include (inclusive).' },
           granularity: { type: 'string', enum: ['week', 'month', 'year'], description: 'Trend bucket size. Default month.' },
+          currency: CURRENCY,
         },
       },
       isConcurrencySafe: () => true,
       async execute(args) {
-        const { data, hint } = await dataOrHint(service)
+        const { data, hint } = await dataOrHint(service, args.currency)
         if (hint) return { error: hint }
-        return { folder: data.folder, statementFiles: data.files.length, ...overview(data.rows, data.overrides, args) }
+        return {
+          folder: data.folder,
+          statementFiles: data.files.length,
+          ...overview(data.rows, data.overrides, { ...args, currency: data.currency }),
+          ...(data.rate ? { exchangeRate: data.rate } : {}),
+          ...(data.warning ? { warning: data.warning } : {}),
+        }
       },
     }),
     tool({
       name: 'spending_transactions',
       description: 'List individual bank statement transactions (newest first) from the Spending Insights plugin, filtered by '
         + 'date range, category and/or merchant text. type "spending" (default) lists purchases (positive) and refunds '
-        + `(negative); "income" lists deposits. Categories: ${CATEGORY_HELP}.`,
+        + '(negative); "income" lists deposits. account is credit / debit (Nordea) or alipay; a converted row keeps its '
+        + `statement amount in "original". Categories: ${CATEGORY_HELP}.`,
       parameters: {
         type: 'object',
         properties: {
@@ -203,14 +267,16 @@ function tools(service) {
           merchant: { type: 'string', description: 'Case-insensitive text to match in the merchant name or statement title.' },
           type: { type: 'string', enum: ['spending', 'income'] },
           limit: { type: 'integer', description: 'Maximum rows to return, 1–500. Default 50.' },
+          currency: CURRENCY,
         },
       },
       isConcurrencySafe: () => true,
       async execute(args) {
-        const { data, hint } = await dataOrHint(service)
+        const { data, hint } = await dataOrHint(service, args.currency)
         if (hint) return { error: hint }
         try {
-          return transactions(data.rows, data.overrides, args)
+          const result = transactions(data.rows, data.overrides, { ...args, currency: data.currency })
+          return data.warning ? { ...result, warning: data.warning } : result
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) }
         }

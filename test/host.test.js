@@ -7,6 +7,7 @@ import {
   loadSettings, overview, readFolder, resolveCategory, saveSettings, storePath, transactions,
 } from '../src/host/core.js'
 import { apply, chooseFolderMac } from '../src/host/index.js'
+import { decode, fetchRates } from '../src/host/core.js'
 
 const HEADER = 'Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
 const line = (d, title, amount) => `"${d}";"${d}";"${title}";"${amount}";"EUR";;;;;;\n`
@@ -40,9 +41,9 @@ test('reads CSVs in the folder and one level down, de-duplicating overlaps', asy
 test('settings round-trip and drop unknown categories', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'spending-store-'))
   const file = join(dir, 'storages', 'spending-insights.json')
-  assert.deepEqual(await loadSettings(file), { folder: null, overrides: {} })
+  assert.deepEqual(await loadSettings(file), { folder: null, overrides: {}, currency: 'EUR' })
   await saveSettings(file, { folder: '/x', overrides: { A: 'Pets', B: 'Nope' } })
-  assert.deepEqual(await loadSettings(file), { folder: '/x', overrides: { A: 'Pets' } })
+  assert.deepEqual(await loadSettings(file), { folder: '/x', overrides: { A: 'Pets' }, currency: 'EUR' })
   assert.equal(storePath({ DSH_HOME: '/h' }), '/h/storages/spending-insights.json')
 })
 
@@ -96,7 +97,7 @@ test('host plugin exposes a Remote service and agent tools', async () => {
     const svc = ctx.provided.spendingInsights
     assert.equal(svc.typertRemote.namespace, 'spendingInsights')
     const marker = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(svc), '@deepseek-ai/dsh-typert-protocol/remote-methods').value
-    assert.deepEqual(marker.methods.map(m => m.method), ['state', 'pickFolder', 'setFolder', 'setOverride', 'importOverrides'])
+    assert.deepEqual(marker.methods.map(m => m.method), ['state', 'setCurrency', 'pickFolder', 'setFolder', 'setOverride', 'importOverrides'])
     // The Gateway reads Remote parameter names from method source.
     assert.match(svc.setOverride.toString(), /^async setOverride\(merchant, category\)/)
 
@@ -155,4 +156,93 @@ test('macOS chooser: POSIX path without trailing slash, null on cancel', async (
   const cancel = Object.assign(new Error('execution error: User canceled. (-128)'), { stderr: '' })
   assert.equal(await chooseFolderMac(undefined, fake('', cancel)), null)
   await assert.rejects(chooseFolderMac(undefined, fake('', new Error('boom'))), /boom/)
+})
+
+const ALIPAY_CSV = '导出信息：\r\n------支付宝------\r\n交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商家订单号,备注,\r\n'
+  + '2026-10-20 15:10:15,餐饮美食,海底捞,x,火锅,支出,745.00,花呗,交易成功,1\t,2\t,,\r\n'
+
+/** GBK bytes for the text above (Node has no GBK encoder): ASCII passes through, CJK via a small table. */
+function gbk(text) {
+  const table = new Map()
+  const dec = new TextDecoder('gbk')
+  for (let hi = 0x81; hi <= 0xfe; hi++) {
+    for (let lo = 0x40; lo <= 0xfe; lo++) {
+      const ch = dec.decode(Uint8Array.of(hi, lo))
+      if (ch.length === 1 && !table.has(ch)) table.set(ch, [hi, lo])
+    }
+  }
+  const out = []
+  for (const ch of text) {
+    if (ch.charCodeAt(0) < 0x80) out.push(ch.charCodeAt(0))
+    else out.push(...table.get(ch))
+  }
+  return Buffer.from(out)
+}
+
+test('decodes GBK Alipay exports; UTF-8 stays UTF-8', () => {
+  assert.equal(decode(gbk(ALIPAY_CSV)), ALIPAY_CSV)
+  assert.equal(decode(Buffer.from(ALIPAY_CSV, 'utf8')), ALIPAY_CSV)
+})
+
+test('fetchRates: frankfurter first, open.er-api as fallback, error when both fail', async () => {
+  const ok = body => ({ ok: true, json: async () => body })
+  const frank = async url => (assert.match(url, /frankfurter/), ok({ date: '2026-11-06', rates: { CNY: 7.45 } }))
+  assert.deepEqual((await fetchRates(['CNY', 'EUR'], frank)).rates, { EUR: 1, CNY: 7.45 })
+  const fallback = async url => (/frankfurter/.test(url) ? { ok: false, status: 503 } : ok({ time_last_update_unix: 1794182551, rates: { CNY: 7.5, USD: 1.1 } }))
+  const r = await fetchRates(['CNY'], fallback)
+  assert.deepEqual([r.rates, r.source], [{ EUR: 1, CNY: 7.5 }, 'open.er-api.com'])
+  await assert.rejects(fetchRates(['CNY'], async () => { throw new Error('offline') }), /无法获取汇率/)
+})
+
+test('host converts Alipay RMB and Nordea EUR into the chosen currency', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'spending-fx-'))
+  const prev = process.env.DSH_HOME
+  process.env.DSH_HOME = dir
+  try {
+    const stmts = join(dir, 'stmts')
+    await mkdir(stmts)
+    await writeFile(join(stmts, 'Alipay(20261001-20261031).csv'), gbk(ALIPAY_CSV))
+    await writeFile(join(stmts, 'Nordea Gold - oct.csv'), HEADER + line('28.10.2026', 'Retail FIN Finland Wolt Oy', '-7.50'))
+    const ctx = fakeCtx()
+    apply(ctx)
+    const svc = ctx.provided.spendingInsights
+    let online = true
+    let fetches = 0
+    svc.fetchRates = async () => {
+      fetches++
+      if (!online) throw new Error('offline')
+      return { rates: { EUR: 1, CNY: 7.45 }, date: '2026-11-06', source: 'test', fetchedAt: Date.now() }
+    }
+    await svc.setFolder(stmts)
+
+    const eur = await svc.state()
+    assert.equal(eur.currency, 'EUR')
+    assert.deepEqual(eur.rows.map(r => [r.merchant, r.amount, r.account]), [['Wolt Oy', -7.5, 'credit'], ['海底捞', -100, 'alipay']])
+    assert.deepEqual(eur.rows[1].original, { amount: -745, currency: 'CNY' })
+    assert.equal(eur.rate.stale, false)
+
+    const cny = await svc.setCurrency('CNY')
+    assert.equal(cny.ok, true)
+    assert.deepEqual(cny.state.rows.map(r => Math.round(r.amount * 100) / 100), [-55.87, -745])
+    assert.equal((await svc.setCurrency('USD')).ok, false)
+
+    const tools = []
+    ctx.injected.tools({ tools: { register: t => tools.push(t) } })
+    const ov = await tools.find(t => t.name === 'spending_overview').execute({})
+    assert.equal(ov.currency, 'CNY')
+    assert.equal(ov.totals.spending, 800.88)
+    const inEur = await tools.find(t => t.name === 'spending_transactions').execute({ currency: 'EUR', merchant: '海底捞' })
+    assert.deepEqual([inEur.currency, inEur.total, inEur.transactions[0].original], ['EUR', 100, { amount: 745, currency: 'CNY' }])
+
+    // Offline: the widget keeps working with the last rate, marked stale.
+    online = false
+    svc.rates = undefined
+    const stale = await svc.state()
+    assert.equal(stale.rate.stale, true)
+    assert.equal(stale.rows.length, 2)
+    assert.equal(fetches, 2) // setCurrency and the tools reused the rate fetched on open
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prev
+  }
 })

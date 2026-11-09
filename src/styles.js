@@ -50,6 +50,8 @@ body[data-ds-dark-theme] .dshsp-root {
   cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .dshsp-link:focus-visible { outline: 2px solid var(--sp-accent); outline-offset: 1px; border-radius: 4px; }
 .dshsp-input.dshsp-path { width: 340px; }
+.dshsp-rate { color: var(--sp-text-3); font-size: 12px; margin-top: 2px; }
+.dshsp-orig { display: block; color: var(--sp-text-3); font-size: 11px; line-height: 14px; }
 .dshsp-folder { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--sp-hover); border-radius: 4px;
   padding: 1px 5px; display: inline-block; max-width: min(520px, 60vw); overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; vertical-align: bottom; }

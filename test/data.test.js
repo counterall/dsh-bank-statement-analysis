@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   bucketize, bucketLabel, categorize, categoryTotals, merchantOf, mergeRows,
-  accountOf, incomeOf, parseAmount, parseDate, parseFinvoice, parseStatement, parseStatementFile, customBounds, rangeCoversAll, rangeEnd, rangeStart, spendingOf, titleKey,
+  accountOf, incomeOf, parseAmount, parseDate, parseFinvoice, parseStatement, parseStatementFile, customBounds, convertRows, parseAlipay, rangeCoversAll, rangeEnd, rangeStart, spendingOf, titleKey,
 } from '../src/data.js'
 
 const HEADER_CSV = 'Transaction date;Booking date;Title;Amount;Currency;Transaction type;Original amount;Original currency;City;Country;Exchange rate\n'
@@ -218,4 +218,54 @@ test('custom range: open ends, invalid ends ignored, reversed ends swapped', () 
   assert.deepEqual(customBounds('', '2026-05-31'), { from: undefined, to: '2026-05-31' })
   assert.deepEqual(customBounds('2026-06-01', '2026-01-01'), { from: '2026-01-01', to: '2026-06-01' })
   assert.deepEqual(customBounds('garbage', undefined), { from: undefined, to: undefined })
+})
+
+const ALIPAY = [
+  '------------------------------------------------------------------------------------',
+  '导出信息：',
+  '共4笔记录',
+  '------------------------支付宝支付科技有限公司  电子客户回单------------------------',
+  '交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商家订单号,备注,',
+  '2026-05-24 15:10:15,餐饮美食,PS Cafe Harding Road,ext***@stripe.com,PS Cafe Harding Road,支出,914.65,花呗,交易成功,1\t,2\t,,',
+  '2026-05-23 12:54:43,其他,GPay Network (S) Pte. Ltd.,b15***,Transport,支出,97.04,花呗,交易关闭,3\t,4\t,,',
+  '2026-05-22 14:23:20,其他,GPay Network (S) Pte. Ltd.,b15***,Transport,支出,94.94,花呗,交易成功,5\t,6\t,,',
+  '2026-05-20 01:18:06,日用百货,7-Eleven(Thailand),zc2***,Miscellaneous products,支出,63.56,花呗,交易成功,7\t,8\t,,',
+  '2026-05-19 10:00:00,转账红包,余额宝,x,转入,不计收支,500.00,余额,交易成功,9\t,10\t,,',
+  '2026-05-18 10:00:00,其他,PS Cafe Harding Road,x,退款-PS Cafe,收入,14.65,花呗,退款成功,11\t,12\t,,',
+].join('\r\n')
+
+test('Alipay export: RMB rows, closed and neutral rows left out, categories from Alipay hints', () => {
+  const { account, rows, skipped } = parseStatementFile(ALIPAY, 'Alipay(20260501-20260602).csv')
+  assert.equal(account, 'alipay')
+  assert.equal(skipped, 0)
+  assert.deepEqual(rows.map(r => [r.date, r.merchant, r.amount, r.currency, r.kind]), [
+    ['2026-05-24', 'PS Cafe Harding Road', -914.65, 'CNY', 'purchase'],
+    ['2026-05-22', 'GPay Network (S) Pte. Ltd.', -94.94, 'CNY', 'purchase'],
+    ['2026-05-20', '7-Eleven(Thailand)', -63.56, 'CNY', 'purchase'],
+    ['2026-05-18', 'PS Cafe Harding Road', 14.65, 'CNY', 'refund'],
+  ])
+  const cats = Object.fromEntries(spendingOf(rows, {}).map(e => [e.merchant, e.category]))
+  assert.deepEqual(cats, {
+    'PS Cafe Harding Road': 'Restaurants & cafés', // merchant rule (cafe)
+    'GPay Network (S) Pte. Ltd.': 'Transport & car', // 商品说明 "Transport"
+    '7-Eleven(Thailand)': 'Groceries', // Alipay 日用百货
+  })
+  assert.equal(spendingOf(rows, { '7-Eleven(Thailand)': 'Shopping' })[2].category, 'Shopping')
+  assert.throws(() => parseAlipay('a,b\n1,2'), /Alipay/)
+})
+
+test('convertRows: EUR and CNY both ways, original kept, missing rates reported', () => {
+  const rows = [
+    { amount: -10, currency: 'EUR' },
+    { amount: -74.5, currency: 'CNY' },
+    { amount: -1, currency: 'USD' },
+  ]
+  const rates = { EUR: 1, CNY: 7.45 }
+  const eur = convertRows(rows, 'EUR', rates)
+  assert.deepEqual(eur.rows.map(r => [r.amount, r.currency]), [[-10, 'EUR'], [-10, 'EUR']])
+  assert.deepEqual(eur.rows[1].original, { amount: -74.5, currency: 'CNY' })
+  assert.deepEqual(eur.missing, ['USD'])
+  const cny = convertRows(rows.slice(0, 2), 'CNY', rates)
+  assert.deepEqual(cny.rows.map(r => Math.round(r.amount * 100) / 100), [-74.5, -74.5])
+  assert.deepEqual(convertRows(rows.slice(1, 2), 'EUR', undefined).missing, ['CNY'])
 })
